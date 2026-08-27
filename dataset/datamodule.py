@@ -1,7 +1,5 @@
 import lightning as L
 from torch.utils.data import DataLoader
-from dataset.cylinder import CylinderMeshDataset
-from dataset.smoke_data import train_datapipe_ns_cond, valid_datapipe_ns_cond
 from modules.modules.normalizer import Normalizer
 from modules.utils import Struct
 import copy
@@ -11,7 +9,7 @@ class FluidsDataModule(L.LightningDataModule):
                  dataconfig,) -> None:
         
         super().__init__()
-        dataset_config = dataconfig["dataset"]
+        dataset_config = copy.deepcopy(dataconfig["dataset"])
         normalizer_config = dataconfig["normalizer"]
         self.batch_size = dataconfig["batch_size"]
         self.num_workers = dataconfig["num_workers"]
@@ -24,15 +22,37 @@ class FluidsDataModule(L.LightningDataModule):
             self.drop_last = False
 
         if self.mode == "ns2D":
+            from dataset.smoke_data import (
+                train_datapipe_ns_cond,
+                valid_datapipe_ns_cond,
+            )
+
             self.train_dataset = train_datapipe_ns_cond(Struct(**dataset_config)) # change dict to object to support dot notation
             self.val_dataset = valid_datapipe_ns_cond(Struct(**dataset_config))
             
         elif self.mode == "cylinder":
+            from dataset.cylinder import CylinderMeshDataset
+
             data_dir = copy.copy(dataconfig['dataset']["data_dir"])
-            dataconfig['dataset']["data_dir"] = data_dir + "/train_downsampled_labeled.h5"
+            dataset_config["data_dir"] = data_dir + "/train_downsampled_labeled.h5"
             self.train_dataset = CylinderMeshDataset(**dataset_config)
-            dataconfig['dataset']["data_dir"] = data_dir + "/valid_downsampled_labeled.h5"
+            dataset_config["data_dir"] = data_dir + "/valid_downsampled_labeled.h5"
             self.val_dataset = CylinderMeshDataset(**dataset_config)
+
+        elif self.mode == "multigeometry":
+            from dataset.multigeometry import MultiGeometryWindowDataset
+
+            self.train_dataset = MultiGeometryWindowDataset(
+                manifest_path=dataset_config["train_manifest"],
+                max_open_files=dataset_config.get("max_open_files", 8),
+            )
+            self.val_dataset = MultiGeometryWindowDataset(
+                manifest_path=dataset_config["validation_manifest"],
+                max_open_files=dataset_config.get("max_open_files", 8),
+            )
+
+        else:
+            raise ValueError(f"Unsupported data mode: {self.mode}")
             
         self.normalizer = Normalizer(dataset=self.train_dataset,
                                      **normalizer_config)

@@ -323,9 +323,6 @@ class AutoencoderKL(L.LightningModule):
         lr = self.optimizers().param_groups[0]['lr']
         self.log('lr', lr, prog_bar=False, logger=True, on_step=False, on_epoch=True, sync_dist=self.dist)
 
-        sch = self.lr_schedulers()
-        sch.step()
-
         return loss 
 
     def validation_step(self, batch, batch_idx, eval=False):
@@ -361,18 +358,31 @@ class AutoencoderKL(L.LightningModule):
                                     lr=lr, betas=(0.5, 0.9))
         
             
+        max_steps = int(self.trainconfig.get("max_steps", 0))
         effective_batch_size = self.batch_size * self.accumulation_steps
+        scheduler_steps = max_steps or (
+            self.trainconfig["max_epochs"]
+            * (self.trainconfig["dataset_size"] // effective_batch_size + 1)
+        )
         if self.trainconfig["scheduler"] == "OneCycle":
             scheduler_ae = torch.optim.lr_scheduler.OneCycleLR(optimizer=opt_ae,
                                                             max_lr=lr,
-                                                            total_steps=self.trainconfig["max_epochs"] * (self.trainconfig["dataset_size"] // effective_batch_size  + 1),
+                                                            total_steps=scheduler_steps,
                                                             pct_start=self.trainconfig["pct_start"],)
 
         elif self.trainconfig["scheduler"] == "Cosine":
             scheduler_ae = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=opt_ae,
-                                                                      T_max=self.trainconfig["max_epochs"] * (self.trainconfig["dataset_size"] // effective_batch_size  + 1),)
+                                                                      T_max=scheduler_steps,)
         else:
             scheduler_ae = None
 
-
-        return [opt_ae], [scheduler_ae]
+        if scheduler_ae is None:
+            return opt_ae
+        return {
+            "optimizer": opt_ae,
+            "lr_scheduler": {
+                "scheduler": scheduler_ae,
+                "interval": "step",
+                "frequency": 1,
+            },
+        }

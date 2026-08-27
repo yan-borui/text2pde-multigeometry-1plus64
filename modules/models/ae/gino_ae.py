@@ -52,6 +52,7 @@ class GINO_Encoder(nn.Module):
             gno_transform_type='linear',
             gno_use_torch_scatter=True,
             use_open3d=True,
+            query_chunk_size=None,
         ):
         
         super().__init__()
@@ -61,6 +62,9 @@ class GINO_Encoder(nn.Module):
         
         self.nb_search_out = NeighborSearch(use_open3d=use_open3d)
         self.gno_radius = gno_radius
+        self.query_chunk_size = query_chunk_size
+        if self.query_chunk_size is not None and self.query_chunk_size <= 0:
+            raise ValueError("query_chunk_size must be positive or None")
 
         self.x_projection = MLPLinear(layers=[in_channels, projection_channels])
 
@@ -77,8 +81,9 @@ class GINO_Encoder(nn.Module):
         if gno_transform_type == "nonlinear" or gno_transform_type == "nonlinear_kernelonly":
             in_kernel_in_dim += self.projection_channels
             
+        gno_mlp_hidden_layers = list(gno_mlp_hidden_layers)
         gno_mlp_hidden_layers.insert(0, in_kernel_in_dim)
-        gno_mlp_hidden_layers.append(projection_channels) 
+        gno_mlp_hidden_layers.append(projection_channels)
         self.gno_in = IntegralTransform(
                     mlp_layers=gno_mlp_hidden_layers,
                     mlp_non_linearity=gno_mlp_non_linearity,
@@ -107,25 +112,42 @@ class GINO_Encoder(nn.Module):
             shape (1, n_gridpts_1, .... n_gridpts_n, gno_coord_dim)
         """
         batch_size = x.shape[0]
-        input_geom = input_geom.squeeze(0) 
+        input_geom = input_geom.squeeze(0)
         latent_queries = latent_queries.squeeze(0)
-    
-        spatial_nbrs = self.nb_search_out(input_geom, 
-                                          latent_queries.view((-1, latent_queries.shape[-1])), 
-                                          radius=self.gno_radius)
-        x = self.x_projection(x) # b, n_in, in_channels -> b, n_in, projection_channels
-        x = x.squeeze(0) # n_in, projection_channels
+        grid_shape = latent_queries.shape[:-1]
+        latent_queries_flat = latent_queries.reshape(-1, latent_queries.shape[-1])
 
+        x = self.x_projection(x).squeeze(0)
+        input_geom_embed = input_geom
+        latent_queries_embed = latent_queries_flat
         if self.pos_embed is not None:
-            input_geom = self.pos_embed(input_geom) # n_in, coord_dim -> n_in, gno_coord_dim_embed
-            latent_queries = self.pos_embed(latent_queries) # n_gridpts_1, .... n_gridpts_n, coord_dim -> n_gridpts_1, .... n_gridpts_n, gno_coord_dim_embed
+            input_geom_embed = self.pos_embed(input_geom)
+            latent_queries_embed = self.pos_embed(latent_queries_flat)
 
-        in_p = self.gno_in(y=input_geom, # n_in, gno_coord_dim
-                           x=latent_queries.view((-1, latent_queries.shape[-1])), # (n_gridpts_1, .... n_gridpts_n), gno_coord_dim
-                           f_y=x, # b, n_in, projection_channels
-                           neighbors=spatial_nbrs)
-        
-        grid_shape = latent_queries.shape[:-1] 
+        if self.query_chunk_size is None:
+            query_slices = ((latent_queries_flat, latent_queries_embed),)
+        else:
+            query_slices = zip(
+                latent_queries_flat.split(self.query_chunk_size, dim=0),
+                latent_queries_embed.split(self.query_chunk_size, dim=0),
+            )
+
+        outputs = []
+        for raw_queries, embedded_queries in query_slices:
+            spatial_nbrs = self.nb_search_out(
+                input_geom,
+                raw_queries,
+                radius=self.gno_radius,
+            )
+            outputs.append(
+                self.gno_in(
+                    y=input_geom_embed,
+                    x=embedded_queries,
+                    f_y=x,
+                    neighbors=spatial_nbrs,
+                )
+            )
+        in_p = torch.cat(outputs, dim=0)
         in_p = in_p.view((batch_size, *grid_shape, self.projection_channels))
         
         return in_p # shape [1, n_gridpts_1, ..., n_gridpts_n, f_dim]
@@ -174,6 +196,7 @@ class GINO_Decoder(nn.Module):
             gno_use_torch_scatter=True,
             use_open3d=True,
             tanh_out = False,
+            query_chunk_size=None,
         ):
         
         super().__init__()
@@ -183,6 +206,9 @@ class GINO_Decoder(nn.Module):
         self.nb_search_out = NeighborSearch(use_open3d=use_open3d)
         self.gno_radius = gno_radius
         self.tanh_out = tanh_out
+        self.query_chunk_size = query_chunk_size
+        if self.query_chunk_size is not None and self.query_chunk_size <= 0:
+            raise ValueError("query_chunk_size must be positive or None")
 
         if gno_coord_embed_dim is not None:
             self.pos_embed = FourierEmb(hidden_dim=gno_coord_embed_dim, in_dim=gno_coord_dim)
@@ -193,6 +219,7 @@ class GINO_Decoder(nn.Module):
         ### output GNO
         out_kernel_in_dim = 2 * self.gno_coord_dim
         out_kernel_in_dim += projection_channels if gno_transform_type != 'linear' else 0
+        gno_mlp_hidden_layers = list(gno_mlp_hidden_layers)
         gno_mlp_hidden_layers.insert(0, out_kernel_in_dim)
         gno_mlp_hidden_layers.append(projection_channels)
         self.gno_out = IntegralTransform(
@@ -211,33 +238,37 @@ class GINO_Decoder(nn.Module):
         # in_p is in shape (n_gridpts_1, .... n_gridpts_n, gno_coord_dim)
         # out_p is in shape (n_out, gno_coord_dim)
 
-        in_to_out_nb = self.nb_search_out(
-            in_p.view(-1, in_p.shape[-1]), 
-            out_p,
-            self.gno_radius,
-            )# for each output point, find the neighbors in the latent grid 
-    
-        #Embed input points
-        n_in = in_p.view(-1, in_p.shape[-1]).shape[0]
-        in_p_embed = in_p.reshape((n_in, -1)) # flatten to ((n_gridpts_1, .... n_gridpts_n), gno_coord_dim)
+        in_p_flat = in_p.reshape(-1, in_p.shape[-1])
+        n_in = in_p_flat.shape[0]
+        in_p_embed = in_p_flat
         if self.pos_embed is not None:
             in_p_embed = self.pos_embed(in_p_embed)
-        
-        #Embed output points
-        out_p_embed = out_p
-        if self.pos_embed is not None:
-            out_p_embed = self.pos_embed(out_p_embed)
-        
-        latent_embed = rearrange(latent_embed, 'b n1 n2 n3 c -> b (n1 n2 n3) c')
-        # rehape to batch, (n_1 * n_2 * ... * n_k), hidden_channels
 
-        #(n_out, fno_hidden_channels)
-        out = self.gno_out(y=in_p_embed, 
-                    neighbors=in_to_out_nb,
-                    x=out_p_embed,
-                    f_y=latent_embed,) # apply kernel integration to latent embedding, sum on output points
-        
-        out = self.projection(out)
+        latent_embed = rearrange(latent_embed, 'b n1 n2 n3 c -> b (n1 n2 n3) c')
+
+        if self.query_chunk_size is None:
+            output_chunks = (out_p,)
+        else:
+            output_chunks = out_p.split(self.query_chunk_size, dim=0)
+
+        outputs = []
+        for output_chunk in output_chunks:
+            in_to_out_nb = self.nb_search_out(
+                in_p_flat,
+                output_chunk,
+                self.gno_radius,
+            )
+            output_chunk_embed = output_chunk
+            if self.pos_embed is not None:
+                output_chunk_embed = self.pos_embed(output_chunk)
+            output = self.gno_out(
+                y=in_p_embed,
+                neighbors=in_to_out_nb,
+                x=output_chunk_embed,
+                f_y=latent_embed,
+            )
+            outputs.append(self.projection(output))
+        out = torch.cat(outputs, dim=1)
 
         if self.tanh_out:
             out = torch.tanh(out)
@@ -288,7 +319,8 @@ class Encoder(nn.Module):
             z_channels = 256,
             double_z = False,
             use_open3d=True,
-            tanh_out=False
+            tanh_out=False,
+            query_chunk_size=None,
         ):
 
         super().__init__()
@@ -303,7 +335,8 @@ class Encoder(nn.Module):
             gno_mlp_non_linearity=gno_mlp_non_linearity,
             gno_transform_type=gno_transform_type,
             gno_use_torch_scatter=gno_use_torch_scatter,
-            use_open3d=use_open3d
+            use_open3d=use_open3d,
+            query_chunk_size=query_chunk_size,
         )
 
         self.cnn_encoder = CNN_Encoder(in_channels=hidden_channels,
@@ -389,7 +422,8 @@ class Decoder(nn.Module):
             z_channels = 256,
             double_z = False,
             use_open3d=True,
-            tanh_out=False
+            tanh_out=False,
+            query_chunk_size=None,
         ):
 
         super().__init__()
@@ -404,7 +438,8 @@ class Decoder(nn.Module):
                                          gno_transform_type=gno_transform_type,
                                          gno_use_torch_scatter=gno_use_torch_scatter,
                                          use_open3d=use_open3d,
-                                         tanh_out=tanh_out)
+                                         tanh_out=tanh_out,
+                                         query_chunk_size=query_chunk_size)
         
         self.cnn_decoder = CNN_Decoder(in_channels=in_channels,
                                      hidden_channels=hidden_channels,
@@ -532,4 +567,3 @@ class ConditionalEncoder(nn.Module):
             z = self.flatten(z) # b (n1 n2) c
             z = self.head(z) # b (n1 n2) out_dim
         return z # expected in b n d for cross attention
-    

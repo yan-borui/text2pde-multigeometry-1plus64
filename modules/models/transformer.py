@@ -11,6 +11,7 @@
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 import numpy as np
 import math
 from timm.models.vision_transformer import Attention, Mlp
@@ -178,6 +179,7 @@ class DiT(nn.Module):
         use_cross_attn=False,
         context_dim=None,
         dim = 3,
+        gradient_checkpointing=False,
     ):
         super().__init__()
         print("Initializing DiT")
@@ -189,7 +191,8 @@ class DiT(nn.Module):
         self.dim = dim
         self.input_size = input_size
         self.patch_size = patch_size
-        self.context_dim = context_dim  
+        self.context_dim = context_dim
+        self.gradient_checkpointing = gradient_checkpointing
 
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True, dim=dim)
         self.t_embedder = TimestepEmbedder(hidden_size)
@@ -308,7 +311,13 @@ class DiT(nn.Module):
         cond_pooled = self.y_embedder(cond_pooled)      # (N, D)
         c = t + cond_pooled                             # (N, D)
         for block in self.blocks:
-            x = block(x, c, context, mask)              # (N, T, D)
+            if self.gradient_checkpointing and self.training:
+                def run_block(block_input, current_block=block):
+                    return current_block(block_input, c, context, mask)
+
+                x = checkpoint(run_block, x, use_reentrant=False)
+            else:
+                x = block(x, c, context, mask)          # (N, T, D)
         x = self.final_layer(x, c)                      # (N, T, patch_size ** (dim) * out_channels)
         x = self.unpatchify(x)                          # (N, out_channels, H, W)
         return x

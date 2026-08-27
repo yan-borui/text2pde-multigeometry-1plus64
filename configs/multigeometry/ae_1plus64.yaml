@@ -1,0 +1,96 @@
+model_name: ae
+
+data:
+  batch_size: 1
+  num_workers: 0
+  mode: multigeometry
+  drop_last: false
+  dataset:
+    train_manifest: /home/shinku/projects/dgn4cfd_runs/text2pde_multigeom_1plus64_20260827a/data/prepared_v1/train_windows.json
+    validation_manifest: /home/shinku/projects/dgn4cfd_runs/text2pde_multigeom_1plus64_20260827a/data/prepared_v1/validation_monitor_windows.json
+    max_open_files: 8
+    use_embed: false
+  normalizer:
+    use_norm: true
+    scaler: normal
+    stat_path: /home/shinku/projects/dgn4cfd_runs/text2pde_multigeom_1plus64_20260827a/data/prepared_v1/train_normal_stats.pkl
+    recalculate: false
+    conditional: false
+
+model:
+  aeconfig:
+    double_z: true
+    latent_grid_size: 64
+    encoder:
+      in_channels: 3
+      out_channels: 16
+      hidden_channels: 64
+      z_channels: 16
+      resolution: 64
+      ch_mult: [1, 2, 4]
+      num_res_blocks: 2
+      attn_resolutions: [16]
+      dropout: 0.1
+      double_z: true
+      tanh_out: false
+      gno_coord_dim: 3
+      gno_coord_embed_dim: 16
+      gno_radius: 0.0425
+      gno_mlp_hidden_layers: [64, 64, 64, 64]
+      gno_transform_type: linear
+      gno_use_torch_scatter: true
+      use_open3d: true
+      query_chunk_size: 8192
+    decoder:
+      in_channels: 16
+      out_channels: 3
+      hidden_channels: 64
+      z_channels: 16
+      resolution: 64
+      ch_mult: [1, 2, 4]
+      num_res_blocks: 2
+      attn_resolutions: [16]
+      dropout: 0.1
+      double_z: true
+      tanh_out: false
+      gno_coord_dim: 3
+      gno_coord_embed_dim: 16
+      gno_radius: 0.0425
+      gno_mlp_hidden_layers: [64, 64, 64, 64]
+      gno_transform_type: linear
+      gno_use_torch_scatter: true
+      use_open3d: true
+      query_chunk_size: 8192
+  lossconfig:
+    kl_weight: 2.0e-07
+
+training:
+  seed: 42
+  accelerator: gpu
+  devices: 1
+  strategy: auto
+  precision: 16-mixed
+  deterministic: false
+  accumulate_grad_batches: 4
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 0
+  enable_plot_callback: false
+  logger: csv
+  log_every_n_steps: 20
+  last_every_n_steps: 5000
+  milestone_every_n_steps: 39372
+  checkpoint: null
+  dataset_size: 157488
+  max_epochs: 3
+  max_steps: 118116
+  learning_rate: 1.0e-05
+  pct_start: 0.15
+  scheduler: Cosine
+  dist: false
+  limit_val_batches: 24
+  default_root_dir: /home/shinku/projects/dgn4cfd_runs/text2pde_multigeom_1plus64_20260827a/ae
+  run_dir: /home/shinku/projects/dgn4cfd_runs/text2pde_multigeom_1plus64_20260827a/ae/formal
+
+wandb:
+  name: Text2PDE_multigeometry_AE_1plus64_
+  project: text2pde_matched_baseline

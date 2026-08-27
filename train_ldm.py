@@ -10,8 +10,8 @@ from modules.modules.callbacks import MeshLDMCallback, GridLDMCallback, Turb3DLD
 import lightning as L
 from lightning.pytorch import seed_everything
 from lightning.pytorch.loggers import WandbLogger
+from lightning.pytorch.loggers import CSVLogger
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
-from lightning.pytorch.callbacks import LearningRateMonitor
 
 torch.set_float32_matmul_precision('high')
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -23,29 +23,57 @@ def main(args):
     dataconfig = config['data']
     modelconfig = config['model']
 
+    if args.first_stage_checkpoint is not None:
+        modelconfig["first_stage_config"]["pretrained_path"] = args.first_stage_checkpoint
+    if args.run_dir is not None:
+        trainconfig["run_dir"] = args.run_dir
+    if args.checkpoint is not None:
+        trainconfig["checkpoint"] = args.checkpoint
+
     seed = trainconfig["seed"]
     now = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     seed_everything(seed)
 
     name = config["wandb"]["name"] + now
-    wandb_logger = WandbLogger(project=config["wandb"]["project"],
-                               name=name,)
-    path = trainconfig["default_root_dir"] + name + "/"
+    configured_run_dir = trainconfig.get("run_dir")
+    if configured_run_dir:
+        path = os.path.abspath(configured_run_dir)
+        name = os.path.basename(path)
+    else:
+        path = os.path.join(trainconfig["default_root_dir"], name)
+
+    if trainconfig.get("logger", "wandb") == "csv":
+        experiment_logger = CSVLogger(save_dir=path, name="lightning", version="")
+    elif trainconfig.get("logger", "wandb") == "none":
+        experiment_logger = False
+    else:
+        experiment_logger = WandbLogger(
+            project=config["wandb"]["project"],
+            name=name,
+            offline=trainconfig.get("wandb_offline", False),
+        )
 
     if torch.cuda.current_device() == 0:
         os.makedirs(path, exist_ok=True) 
-        save_yaml(config, path + "config.yml")
+        save_yaml(config, os.path.join(path, "config.yml"))
         print("Making folder on rank 0")
     
+    checkpoint_dir = os.path.join(path, "checkpoints")
+    milestone_steps = trainconfig.get("milestone_every_n_steps")
     callbacks = [
         ModelCheckpoint(
-            monitor="val/loss",
-            filename= "model_{epoch:02d}-{val/loss:.2f}",
-            dirpath=path,
-            save_top_k=1,
-            save_last=True
-        ), 
-        LearningRateMonitor(logging_interval='epoch')]
+            filename="ldm-epoch{epoch:02d}-step{step}",
+            dirpath=checkpoint_dir,
+            every_n_train_steps=milestone_steps,
+            save_top_k=-1,
+        ),
+        ModelCheckpoint(
+            dirpath=checkpoint_dir,
+            every_n_train_steps=trainconfig.get("last_every_n_steps", 5000),
+            save_top_k=0,
+            save_last=True,
+        ),
+        LearningRateMonitor(logging_interval='step')]
     
     if dataconfig["mode"] == "ns2D":
         from modules.models.ddpm import LatentDiffusion
@@ -54,9 +82,14 @@ def main(args):
         from modules.models.ddpm3D import LatentDiffusion
         callbacks.append(Turb3DLDMCallback())
         print("using Turb3D LDM")
-    else:
+    elif dataconfig["mode"] == "cylinder":
         from modules.models.ddpm import LatentDiffusion
-        callbacks.append(MeshLDMCallback())
+        if trainconfig.get("enable_plot_callback", True):
+            callbacks.append(MeshLDMCallback())
+    elif dataconfig["mode"] == "multigeometry":
+        from modules.models.ddpm import LatentDiffusion
+    else:
+        raise ValueError(f"Unsupported data mode: {dataconfig['mode']}")
 
     # setup scheduler config
     if "scheduler_config" in modelconfig.keys():
@@ -64,6 +97,7 @@ def main(args):
         modelconfig['scheduler_config']["accumulate_grad_batches"] = trainconfig["accumulate_grad_batches"]
         modelconfig['scheduler_config']['dataset_size'] = trainconfig["dataset_size"]
         modelconfig['scheduler_config']['max_epochs'] = trainconfig["max_epochs"]
+        modelconfig['scheduler_config']['max_steps'] = trainconfig.get("max_steps", 0)
 
     datamodule = FluidsDataModule(dataconfig)
     
@@ -76,11 +110,15 @@ def main(args):
                         check_val_every_n_epoch = trainconfig["check_val_every_n_epoch"],
                         log_every_n_steps=trainconfig["log_every_n_steps"],
                         max_epochs = trainconfig["max_epochs"],
+                        max_steps = trainconfig.get("max_steps", -1),
                         default_root_dir = path,
                         callbacks=callbacks,
-                        logger=wandb_logger,
+                        logger=experiment_logger,
                         strategy=trainconfig["strategy"],
                         accumulate_grad_batches=trainconfig["accumulate_grad_batches"],
+                        precision=trainconfig.get("precision", "32-true"),
+                        deterministic=trainconfig.get("deterministic", False),
+                        num_sanity_val_steps=trainconfig.get("num_sanity_val_steps", 2),
                         gradient_clip_val=trainconfig["gradient_clip_val"] if "gradient_clip_val" in trainconfig else 0,
                         limit_train_batches=trainconfig["limit_train_batches"] if "limit_train_batches" in trainconfig else 1.0,
                         limit_val_batches=trainconfig["limit_val_batches"] if "limit_val_batches" in trainconfig else 1.0,)
@@ -96,6 +134,9 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train an LDM')
     parser.add_argument("--config", default=None)
+    parser.add_argument("--first-stage-checkpoint", default=None)
+    parser.add_argument("--run-dir", default=None)
+    parser.add_argument("--checkpoint", default=None)
     args = parser.parse_args()
 
     main(args)

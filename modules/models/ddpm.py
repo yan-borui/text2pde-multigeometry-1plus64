@@ -338,9 +338,6 @@ class DDPM(L.LightningModule):
                  sync_dist=self.dist, batch_size=self.batch_size)
 
         if self.scheduler_config is not None:
-            sch = self.lr_schedulers()
-            sch.step()
-
             lr = self.optimizers().param_groups[0]['lr']
             self.log('lr_abs', lr, prog_bar=True, logger=True, on_step=True, on_epoch=False,
                      sync_dist=self.dist, batch_size=self.batch_size)
@@ -1006,15 +1003,23 @@ class LatentDiffusion(DDPM):
         opt = torch.optim.AdamW(params, lr=lr)
         if self.scheduler_config is not None:
             if self.scheduler_config["scheduler"] == "cosine":
+                max_steps = int(self.scheduler_config.get("max_steps", 0))
                 effective_batch_size = self.scheduler_config["batch_size"] * self.scheduler_config["accumulate_grad_batches"]
                 max_epochs = self.scheduler_config["max_epochs"]
                 dataset_size = self.scheduler_config["dataset_size"]
-                T_max = max_epochs * (dataset_size // effective_batch_size  + 1)
+                T_max = max_steps or max_epochs * (dataset_size // effective_batch_size + 1)
                 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=opt,
                                                                       T_max=T_max,)
                 print(f"Using CosineAnnealingLR with T_max={T_max}")
-        
-            return [opt], [scheduler]
+
+            return {
+                "optimizer": opt,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "interval": "step",
+                    "frequency": 1,
+                },
+            }
         return opt
 
 
