@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "$#" -ne 1 ]]; then
-  echo "usage: run_ldm_stage.sh SELECTED_AE_CHECKPOINT" >&2
+if [[ "$#" -ne 4 ]]; then
+  echo "usage: run_ldm_stage.sh PYTHON_BIN DATA_DIR RESULT_ROOT SELECTED_AE_CHECKPOINT" >&2
   exit 2
 fi
 
-selected_ae=$1
-worktree=/home/shinku/projects/text2pde_matched_20260827_wt
-result_root=/home/shinku/projects/dgn4cfd_runs/text2pde_multigeom_1plus64_20260827a
-venv_python=/home/shinku/projects/text2pde_official_20260826/.venv/bin/python
-ldm_config="$worktree/configs/multigeometry/ldm_1plus64.yaml"
-prepared_dir="$result_root/data/prepared_v1"
+python_bin=$1
+data_dir=$2
+result_root=$3
+selected_ae=$4
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+ldm_config="$result_root/config/ldm_1plus64.yaml"
+prepared_dir="$data_dir/prepared"
 train_dir="$result_root/ldm/formal"
 selection_dir="$result_root/evaluation/ldm_selection_v1"
 validation_dir="$result_root/evaluation/validation_v1"
@@ -20,9 +21,8 @@ test_dir="$result_root/evaluation/test_locked_v1"
 export PYTHONUNBUFFERED=1
 export WANDB_MODE=offline
 export TOKENIZERS_PARALLELISM=false
-export LD_LIBRARY_PATH="/usr/lib/wsl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-cd "$worktree"
+cd "$repo_root"
 if [[ ! -f "$selected_ae" ]]; then
   echo "selected AE checkpoint is missing: $selected_ae" >&2
   exit 40
@@ -36,7 +36,7 @@ if [[ -f "$train_dir/checkpoints/last.ckpt" ]]; then
   resume_args=(--checkpoint "$train_dir/checkpoints/last.ckpt")
 fi
 
-"$venv_python" "$worktree/train_ldm.py" \
+"$python_bin" "$repo_root/train_ldm.py" \
   --config "$ldm_config" \
   --first-stage-checkpoint "$selected_ae" \
   "${resume_args[@]}" \
@@ -46,7 +46,7 @@ printf '%s\n' "$train_pid" > "$train_dir/train.pid"
 (
   printf 'timestamp,index,memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw\n'
   while kill -0 "$train_pid" 2>/dev/null; do
-    /usr/lib/wsl/lib/nvidia-smi \
+    nvidia-smi \
       --query-gpu=timestamp,index,memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw \
       --format=csv,noheader,nounits
     sleep 30
@@ -66,7 +66,7 @@ if [[ "$train_rc" -ne 0 ]]; then
 fi
 
 set +e
-"$venv_python" -m tools.multigeometry.evaluate_ldm \
+"$python_bin" -m tools.multigeometry.evaluate_ldm \
   --mode select \
   --config "$ldm_config" \
   --ae-checkpoint "$selected_ae" \
@@ -90,7 +90,7 @@ if [[ ! -f "$selected_ldm" ]]; then
 fi
 
 set +e
-"$venv_python" -m tools.multigeometry.evaluate_ldm \
+"$python_bin" -m tools.multigeometry.evaluate_ldm \
   --mode validation \
   --config "$ldm_config" \
   --ae-checkpoint "$selected_ae" \
@@ -112,7 +112,7 @@ fi
 printf '%s\n' "$selected_ldm" > "$result_root/evaluation/locked_ldm_checkpoint.txt"
 date --iso-8601=seconds > "$result_root/evaluation/test_unsealed_at.txt"
 set +e
-"$venv_python" -m tools.multigeometry.evaluate_ldm \
+"$python_bin" -m tools.multigeometry.evaluate_ldm \
   --mode test \
   --config "$ldm_config" \
   --ae-checkpoint "$selected_ae" \

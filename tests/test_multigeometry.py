@@ -109,6 +109,33 @@ class MultiGeometryWindowDatasetTest(unittest.TestCase):
         self.assertEqual(tuple(dataset[0]["x"].shape), (2, 5, 3))
         dataset.close()
 
+    def test_relative_source_path_is_resolved_from_manifest_directory(self) -> None:
+        manifest_dir = self.root / "portable" / "prepared"
+        trajectory_dir = self.root / "portable" / "trajectories" / "train"
+        manifest_dir.mkdir(parents=True)
+        trajectory_dir.mkdir(parents=True)
+        source = Path(self.trajectories[0]["source_path"])
+        portable_source = trajectory_dir / "ellipse_00.h5"
+        portable_source.write_bytes(source.read_bytes())
+
+        trajectory = dict(self.trajectories[0])
+        trajectory["source_path"] = "../trajectories/train/ellipse_00.h5"
+        manifest = {
+            "schema": WINDOW_MANIFEST_SCHEMA,
+            "split": "train",
+            "window_length": 2,
+            "window_mode": "explicit",
+            "window_count": 1,
+            "trajectories": [trajectory],
+            "windows": [{"trajectory_index": 0, "start": 0}],
+        }
+        manifest_path = manifest_dir / "train_windows.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        dataset = MultiGeometryWindowDataset(str(manifest_path))
+        self.assertEqual(dataset.trajectories[0]["source_path"], str(portable_source))
+        self.assertEqual(tuple(dataset[0]["x"].shape), (2, 4, 3))
+        dataset.close()
+
     def test_split_and_family_helpers(self) -> None:
         for family in EXPECTED_FAMILIES:
             self.assertEqual(family_from_case_id(f"{family}_51"), family)

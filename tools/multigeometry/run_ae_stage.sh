@@ -1,24 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-worktree=/home/shinku/projects/text2pde_matched_20260827_wt
-result_root=/home/shinku/projects/dgn4cfd_runs/text2pde_multigeom_1plus64_20260827a
-venv_python=/home/shinku/projects/text2pde_official_20260826/.venv/bin/python
-ae_config="$worktree/configs/multigeometry/ae_1plus64.yaml"
-prepared_dir="$result_root/data/prepared_v1"
+if [[ "$#" -ne 4 ]]; then
+  echo "usage: run_ae_stage.sh PYTHON_BIN DATA_DIR RESULT_ROOT RUN_ID" >&2
+  exit 2
+fi
+
+python_bin=$1
+data_dir=$2
+result_root=$3
+run_id=$4
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+ae_config="$result_root/config/ae_1plus64.yaml"
+prepared_dir="$data_dir/prepared"
 train_dir="$result_root/ae/formal"
 selection_dir="$result_root/ae/selection_v1"
-ldm_session=text2pde_ldm_20260827a
+ldm_session="text2pde_ldm_${run_id}"
 
 export PYTHONUNBUFFERED=1
 export WANDB_MODE=offline
 export TOKENIZERS_PARALLELISM=false
-export LD_LIBRARY_PATH="/usr/lib/wsl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-cd "$worktree"
+cd "$repo_root"
 mkdir -p "$train_dir" "$result_root/logs"
-git -C "$worktree" rev-parse HEAD > "$result_root/identity/training_commit.txt"
-git -C "$worktree" status --short > "$result_root/identity/training_git_status.txt"
 date --iso-8601=seconds > "$train_dir/started_at.txt"
 
 resume_args=()
@@ -26,7 +30,7 @@ if [[ -f "$train_dir/checkpoints/last.ckpt" ]]; then
   resume_args=(--checkpoint "$train_dir/checkpoints/last.ckpt")
 fi
 
-"$venv_python" "$worktree/train_AE.py" \
+"$python_bin" "$repo_root/train_AE.py" \
   --config "$ae_config" \
   "${resume_args[@]}" \
   > "$train_dir/train.log" 2>&1 &
@@ -35,7 +39,7 @@ printf '%s\n' "$train_pid" > "$train_dir/train.pid"
 (
   printf 'timestamp,index,memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw\n'
   while kill -0 "$train_pid" 2>/dev/null; do
-    /usr/lib/wsl/lib/nvidia-smi \
+    nvidia-smi \
       --query-gpu=timestamp,index,memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw \
       --format=csv,noheader,nounits
     sleep 30
@@ -55,7 +59,7 @@ if [[ "$train_rc" -ne 0 ]]; then
 fi
 
 set +e
-"$venv_python" -m tools.multigeometry.select_ae \
+"$python_bin" -m tools.multigeometry.select_ae \
   --config "$ae_config" \
   --checkpoint-dir "$train_dir/checkpoints" \
   --manifest "$prepared_dir/validation_monitor_windows.json" \
@@ -74,12 +78,13 @@ if [[ ! -f "$selected_checkpoint" ]]; then
   exit 31
 fi
 if tmux has-session -t "$ldm_session" 2>/dev/null; then
-  echo "refusing to duplicate existing tmux session: $ldm_session" >&2
+  echo "tmux session already exists: $ldm_session" >&2
   exit 32
 fi
 
+mkdir -p "$result_root/ldm"
 tmux new-session -d -s "$ldm_session" \
-  "bash '$worktree/tools/multigeometry/run_ldm_stage.sh' '$selected_checkpoint' > '$result_root/logs/ldm_stage_wrapper.log' 2>&1"
+  "bash '$repo_root/tools/multigeometry/run_ldm_stage.sh' '$python_bin' '$data_dir' '$result_root' '$selected_checkpoint' > '$result_root/logs/ldm_stage_wrapper.log' 2>&1"
 printf '%s\n' "$ldm_session" > "$result_root/ldm/tmux_session.txt"
 date --iso-8601=seconds > "$result_root/ldm/launched_at.txt"
 exit 0

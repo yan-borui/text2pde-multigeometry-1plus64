@@ -6,14 +6,14 @@ data:
   mode: multigeometry
   drop_last: false
   dataset:
-    train_manifest: /home/shinku/projects/dgn4cfd_runs/text2pde_multigeom_1plus64_20260827a/data/prepared_v1/train_windows.json
-    validation_manifest: /home/shinku/projects/dgn4cfd_runs/text2pde_multigeom_1plus64_20260827a/data/prepared_v1/validation_monitor_windows.json
+    train_manifest: null
+    validation_manifest: null
     max_open_files: 8
     use_embed: false
   normalizer:
     use_norm: true
     scaler: normal
-    stat_path: /home/shinku/projects/dgn4cfd_runs/text2pde_multigeom_1plus64_20260827a/data/prepared_v1/train_normal_stats.pkl
+    stat_path: null
     recalculate: false
     conditional: false
 
@@ -40,7 +40,7 @@ model:
       gno_transform_type: linear
       gno_use_torch_scatter: true
       use_open3d: true
-      query_chunk_size: 8192
+      query_chunk_size: null
     decoder:
       in_channels: 16
       out_channels: 3
@@ -60,7 +60,7 @@ model:
       gno_transform_type: linear
       gno_use_torch_scatter: true
       use_open3d: true
-      query_chunk_size: 8192
+      query_chunk_size: null
   lossconfig:
     kl_weight: 2.0e-07
 
@@ -88,8 +88,8 @@ training:
   scheduler: Cosine
   dist: false
   limit_val_batches: 24
-  default_root_dir: /home/shinku/projects/dgn4cfd_runs/text2pde_multigeom_1plus64_20260827a/ae
-  run_dir: /home/shinku/projects/dgn4cfd_runs/text2pde_multigeom_1plus64_20260827a/ae/formal
+  default_root_dir: null
+  run_dir: null
 
 wandb:
   name: Text2PDE_multigeometry_AE_1plus64_

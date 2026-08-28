@@ -24,7 +24,7 @@ class MultiGeometryWindowDataset(Dataset):
         max_open_files: int = 8,
     ) -> None:
         super().__init__()
-        self.manifest_path = Path(manifest_path)
+        self.manifest_path = Path(manifest_path).resolve()
         with self.manifest_path.open("r", encoding="utf-8") as handle:
             self.manifest = json.load(handle)
 
@@ -36,6 +36,11 @@ class MultiGeometryWindowDataset(Dataset):
         self.split = str(self.manifest["split"])
         self.window_length = int(self.manifest["window_length"])
         self.trajectories = list(self.manifest["trajectories"])
+        for trajectory in self.trajectories:
+            source_path = Path(trajectory["source_path"])
+            if not source_path.is_absolute():
+                source_path = self.manifest_path.parent / source_path
+            trajectory["source_path"] = str(source_path.resolve())
         self.window_mode = str(self.manifest["window_mode"])
         self.return_metadata = return_metadata
         self.max_open_files = int(max_open_files)
