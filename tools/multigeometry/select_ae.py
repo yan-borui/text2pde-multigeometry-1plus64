@@ -136,29 +136,13 @@ def main() -> None:
         raise RuntimeError(f"expected three AE cycle checkpoints, found {len(candidates)}")
 
     results = []
-    failures = []
     for candidate in candidates:
-        try:
-            result = evaluate_checkpoint(
-                candidate, config, datamodule, dataset, device
+        result = evaluate_checkpoint(candidate, config, datamodule, dataset, device)
+        if not math.isfinite(result["mean_window_normalized_l1"]):
+            raise FloatingPointError(
+                f"non-finite aggregate AE validation loss for {candidate}"
             )
-            if not math.isfinite(result["mean_window_normalized_l1"]):
-                raise FloatingPointError("non-finite aggregate AE validation loss")
-            results.append(result)
-        except Exception as error:
-            failures.append(
-                {
-                    "checkpoint": str(candidate),
-                    "error_type": type(error).__name__,
-                    "error": str(error),
-                }
-            )
-
-    if not results:
-        with (args.output_dir / "failures.json").open("w", encoding="utf-8") as handle:
-            json.dump(failures, handle, indent=2, sort_keys=True)
-            handle.write("\n")
-        raise RuntimeError("no valid AE checkpoint")
+        results.append(result)
 
     selected = min(
         results,
@@ -173,7 +157,6 @@ def main() -> None:
         "monitor_manifest": str(args.manifest),
         "test_accessed": False,
         "candidates": results,
-        "failures": failures,
         "selected": selected,
     }
     with (args.output_dir / "selection.json").open("w", encoding="utf-8") as handle:

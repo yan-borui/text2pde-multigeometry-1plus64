@@ -98,8 +98,10 @@ CUDA_VISIBLE_DEVICES=0 bash tools/multigeometry/launch_pipeline.sh \
 The AE performs `118,116` optimizer updates with gradient accumulation 4 and
 saves milestone checkpoints at updates `39,372`, `78,744` and `118,116`, plus a
 rolling `last.ckpt`. The fixed validation monitor selects a finite,
-non-constant AE checkpoint. The runner then starts the LDM stage in a second
-tmux session. LDM training also performs `118,116` optimizer updates.
+non-constant AE checkpoint. All three milestones must load strictly and pass the
+finite/non-constant checks; any failed milestone stops selection instead of
+silently shrinking the candidate set. The runner then starts the LDM stage in a
+second tmux session. LDM training also performs `118,116` optimizer updates.
 
 After LDM training, the runner:
 
