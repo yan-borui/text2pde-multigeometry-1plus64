@@ -4,10 +4,13 @@ from modules.modules.normalizer import Normalizer
 from modules.utils import Struct
 import copy
 
+
 class FluidsDataModule(L.LightningDataModule):
-    def __init__(self, 
-                 dataconfig,) -> None:
-        
+    def __init__(
+        self,
+        dataconfig,
+    ) -> None:
+
         super().__init__()
         dataset_config = copy.deepcopy(dataconfig["dataset"])
         normalizer_config = dataconfig["normalizer"]
@@ -15,6 +18,8 @@ class FluidsDataModule(L.LightningDataModule):
         self.num_workers = dataconfig["num_workers"]
         self.mode = dataconfig["mode"]
         self.normalizer = None
+        self.sampler_seed = int(dataconfig.get("sampler_seed", 0))
+        self.train_start_offset = int(dataconfig.get("train_start_offset", 0))
 
         if "drop_last" in dataconfig.keys():
             self.drop_last = dataconfig["drop_last"]
@@ -27,13 +32,15 @@ class FluidsDataModule(L.LightningDataModule):
                 valid_datapipe_ns_cond,
             )
 
-            self.train_dataset = train_datapipe_ns_cond(Struct(**dataset_config)) # change dict to object to support dot notation
+            self.train_dataset = train_datapipe_ns_cond(
+                Struct(**dataset_config)
+            )  # change dict to object to support dot notation
             self.val_dataset = valid_datapipe_ns_cond(Struct(**dataset_config))
-            
+
         elif self.mode == "cylinder":
             from dataset.cylinder import CylinderMeshDataset
 
-            data_dir = copy.copy(dataconfig['dataset']["data_dir"])
+            data_dir = copy.copy(dataconfig["dataset"]["data_dir"])
             dataset_config["data_dir"] = data_dir + "/train_downsampled_labeled.h5"
             self.train_dataset = CylinderMeshDataset(**dataset_config)
             dataset_config["data_dir"] = data_dir + "/valid_downsampled_labeled.h5"
@@ -51,17 +58,31 @@ class FluidsDataModule(L.LightningDataModule):
                 max_open_files=dataset_config.get("max_open_files", 8),
             )
 
+        elif self.mode == "cylinderflow_windows":
+            from dataset.cylinderflow import CylinderFlowWindowDataset
+
+            if self.num_workers != 0:
+                raise ValueError(
+                    "cylinderflow_windows requires num_workers=0 for one safe lazy "
+                    "HDF5 handle per training process"
+                )
+            self.train_dataset = CylinderFlowWindowDataset(
+                manifest_path=dataset_config["train_manifest"],
+            )
+            self.val_dataset = CylinderFlowWindowDataset(
+                manifest_path=dataset_config["validation_manifest"],
+            )
+
         else:
             raise ValueError(f"Unsupported data mode: {self.mode}")
-            
-        self.normalizer = Normalizer(dataset=self.train_dataset,
-                                     **normalizer_config)
+
+        self.normalizer = Normalizer(dataset=self.train_dataset, **normalizer_config)
 
     def prepare_data(self):
         # download, split, etc...
         # only called on 1 GPU/TPU in distributed
         pass
-        
+
     def setup(self, stage: str):
         # Assign train/val datasets for use in dataloaders
         if stage == "fit":
@@ -76,19 +97,37 @@ class FluidsDataModule(L.LightningDataModule):
 
     def train_dataloader(self):
         self.pin_memory = False if self.num_workers == 0 else True
-        return DataLoader(self.train_dataset, 
-                          batch_size=self.batch_size, 
-                          shuffle=True, 
-                          num_workers=self.num_workers, 
-                          pin_memory=self.pin_memory,
-                          drop_last=self.drop_last)
+        sampler = None
+        shuffle = True
+        if self.mode == "cylinderflow_windows":
+            from modules.modules.reproducible_resume import (
+                DeterministicPermutationSampler,
+            )
+
+            sampler = DeterministicPermutationSampler(
+                self.train_dataset,
+                seed=self.sampler_seed,
+                start_offset=self.train_start_offset,
+            )
+            shuffle = False
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            shuffle=shuffle,
+            sampler=sampler,
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
+            drop_last=self.drop_last,
+        )
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, 
-                          batch_size=self.batch_size, 
-                          shuffle=False, 
-                          num_workers=self.num_workers,
-                          drop_last=self.drop_last)
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            drop_last=self.drop_last,
+        )
 
     def test_dataloader(self):
         return None

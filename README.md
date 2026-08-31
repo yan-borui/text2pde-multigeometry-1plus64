@@ -1,197 +1,204 @@
-# Text2PDE: Latent Diffusion Models for Accessible Physics Simulation
-Official implementation of Latent Diffusion Models for Accessible Physics Simulation. [(Paper)](https://arxiv.org/abs/2410.01153)
+# Text2PDE on raw MeshGraphNets CylinderFlow: `1 -> 24 -> rollout64`
 
+This fork trains Text2PDE from random initialization on the original, untemporally-subsampled MeshGraphNets CylinderFlow trajectories. One Text2PDE call consumes one clean UVP frame and generates 24 future frames. Evaluation calls that model three times autoregressively and keeps 64 future frames for a frame-aligned comparison with a `1 -> 64` model.
 
-![Text-Conditioned Samples](./pics/text_examples.png)
+The repository contains code and manifests only. It does not redistribute the MeshGraphNets data or newly trained checkpoints.
 
+## Locked protocol
 
-## Requirements
+- Source: original MeshGraphNets CylinderFlow TFRecords, with `1000/100/100` Train/Validation/Test trajectories.
+- Every trajectory has 600 frames at physical `dt=0.01`; frame stride is always 1.
+- A training example is one contiguous 25-frame window. Every Train trajectory contributes starts `0..575`, for `1000 * 576 = 576,000` examples.
+- UVP normalization is computed from every unique raw Train frame exactly once. Overlapping windows do not reweight the statistics, and Validation/Test fields never enter them.
+- AE and LDM both start from random initialization. Microbatch is 1, gradient accumulation is 4, and one complete pass is 144,000 optimizer steps. Milestone checkpoints are written at steps 48,000, 96,000, and 144,000; `last.ckpt` is resumable at the next exact sample.
+- Validation uses all 100 trajectories, starts `0/268/535`, and sampling seeds `0/1/2`: 900 rollout64 samples per selected checkpoint. Checkpoint selection is Validation-only.
+- Test fields remain inaccessible to the main pipeline. A separate, explicit launcher materializes and evaluates Test only after the Validation checkpoint lock exists.
 
-To install requirements:
-```
-conda-env create -n my_env -f=environment.yml
-```
+The rollout stitch is:
 
-Alternatively, to manually install required packages:
-```setup
-conda create -n "my_env" 
-conda install pytorch==2.0.0 torchvision==0.15.0 torchaudio==2.0.0 pytorch-cuda=11.8 torchdata=0.6.0 -c pytorch -c nvidia 
-conda install pytorch-scatter -c pyg
-conda install lightning -c conda-forge
-pip install transformers 
-pip install wandb h5py tensorboard einops open3d sparse-dot-mkl timm 
-```
-Some packages are just easier to install with pip vs conda.
+| Call | Condition available to the model | Kept local frames | Global future frames |
+|---|---|---:|---:|
+| 1 | true frame 0 | `1:25` | `1..24` |
+| 2 | predicted frame 24 | `1:25` | `25..48` |
+| 3 | predicted frame 48 | `1:17` | `49..64` |
 
-Optional installs for image captioning, FLOPs profiling, and text evaluation:
-```
-pip install scikit-image deepspeed phiflow
-```
+The saved tensor is therefore `truth[0] + call1[1:25] + call2[1:25] + call3[1:17]`, with shape `[65, N, 3]`. The second and third calls receive predictions from the preceding call. Future reference fields are used only after sampling to compute metrics.
 
-If you cannot install pytorch<=2.0.1, please refer to the [Compatibility](#compatibility) section, as some libraries require this version. 
+## Environment
 
-## Datasets
-Full datasets are available [here.](https://huggingface.co/datasets/ayz2/ldm_pdes)
+The upstream environment remains in `environment.yml`. The raw reader is self-contained and does not require TensorFlow or an additional TFRecord package:
 
-Please refer to the [dataset](dataset) directory for a description of the raw data and dataloading. 
-
-## Pretrained Models
-Pretrained models are available [here.](https://huggingface.co/datasets/ayz2/ldm_pdes)
-
-The pretrained models are:
-```
-- Autoencoders:
-    - ae_cylinder.ckpt : autoencoder trained to compress cylinder mesh data across 25 timesteps. Does not use GAN or LPIPS.
-    - ae_ns2D.ckpt: autoencoder trained to compress smoke buoyancy data (48x128x128). Does not use GAN or LPIPS.
-- LDMs:
-    - cylinder flow
-        - ldm_DiT_FF_cylinder.ckpt: ldm model trained to sample a cylinder flow solution conditioned on the first frame
-        - ldm_DiTSmall_FF_cylinder.ckpt: same as previous, just smaller DiT size.
-        - ldm_DiT_text_cylinder.ckpt: ldm model trained to sample a cylinder flow solution conditioned on a text prompt
-        - ldm_DiTSmall_text_cylinder.ckpt: same as previous, just smaller DiT size.
-    - ns2D
-        - ldm_DiT_FF_ns2D.ckpt: ldm model trained to sample a smoke buoyancy solution conditioned on the first frame
-        - ldm_DiTSmall_FF_ns2D.ckpt: same as previous, just smaller DiT size.
-        - ldm_DiTLarge_FF_ns2D.ckpt: same as previous, just large DiT size.
-        - ldm_DiT_text_ns2D.ckpt: ldm model trained to sample a smoke buoyancy solution conditioned on a text prompt
-        - ldm_DiTSmall_text_ns2D.ckpt: same as previous, just smaller DiT size.
-        - ldm_DiTLarge_text_ns2D.ckpt: same as previous, just large DiT size.
+```bash
+conda env create -n text2pde -f environment.yml
+conda activate text2pde
 ```
 
-## Training and Inference
-For more information about the relevant training parameters, see the [configs](configs) directory.
+Use `num_workers: 0` for this HDF5 workflow. The checked-in CylinderFlow configs already enforce it.
 
-Workflow for training a model:
-```
-- Setup environment
-- Download a dataset 
-- Make a log directory 
-- Setup wandb
-- Set paths to dataset, normalization stats, logging directory
-- For LDM training: download a pretrained AE or train an AE
-- Recommended training hardware:
-    - LDM_small: 1xA100
-    - LDM_medium: 4xA100
-    - LDM_large: 4xA100 80GB
-```
+## 1. Prepare Train and Validation
 
-Workflow for inference:
-```
-- Download a pretrained LDM and AE model
-- If doing text re-solving or FLOPs profiling: setup PhiFlow/Deepspeed
-- Set paths to pretrained model and logging directory
-- Approximate memory requirements for inference w/ batch size = 1:
-    - LDM_small: 6.7 GB
-    - LDM_medium: 12.5 GB
-    - LDM_large: 35 GB
+Point the command at the official `meta.json`, `train.tfrecord`, and `valid.tfrecord`. It intentionally has no Test argument.
+
+```bash
+python -m tools.cylinderflow.prepare_data \
+  --meta /data/mgn/cylinder_flow/meta.json \
+  --train-tfrecord /data/mgn/cylinder_flow/train.tfrecord \
+  --validation-tfrecord /data/mgn/cylinder_flow/valid.tfrecord \
+  --output-dir /runs/cylinderflow_raw600_data
+
+python -m tools.cylinderflow.verify_data \
+  --data-dir /runs/cylinderflow_raw600_data
 ```
 
-### Autoencoder
-To train an autoencoder (supports KL regularization, GAN, LPIPS):
-```
-python train_AE.py --config=path/to/config
+The prepared tree contains frame-chunked HDF5 storage, the 25-frame Train/AE monitor manifests, the rollout64 Validation manifests, Train-only normalization, a largest-graph smoke manifest, and a metadata-only sealed Test manifest.
+
+## 2. GPU preflight
+
+Run one AE optimizer update, one LDM optimizer update, and one real three-segment rollout on the largest graph in the prepared package. Released upstream CylinderFlow weights are used only to exercise the LDM/rollout code path; formal AE and LDM training still initialize randomly.
+
+```bash
+bash tools/cylinderflow/run_gpu_smoke.sh /path/to/python \
+  --ae-config configs/cylinderflow/ae_1plus24_raw.yaml \
+  --ldm-config configs/cylinderflow/ldm_1plus24_raw.yaml \
+  --prepared-dir /runs/cylinderflow_raw600_data/prepared \
+  --released-ae /models/ae_cylinder.ckpt \
+  --released-ldm /models/ldm_DiTSmall_FF_cylinder.ckpt \
+  --output-dir /runs/cylinderflow_raw600_preflight \
+  --precision 16-mixed \
+  --ddim-steps 20
 ```
 
-Example: train an autoencoder for the cylinder dataset without GAN or LPIPS
-```
-python train_AE.py --config=configs/cylinder/ae/ae_mesh.yaml
+An actual OOM, non-finite tensor, or process failure makes the preflight fail and leaves its evidence. Observed loss, gradient magnitude, temperature, memory, throughput, and runtime are recorded without heuristic stop thresholds.
+
+## 3. Formal AE and LDM pipeline
+
+The launcher verifies the data package and matching GPU preflight, materializes fixed configs, records source/runtime identity, and starts AE training in tmux. A successful AE run selects among the three AE milestones on a fixed 24-clip Validation reconstruction monitor and launches LDM training. A successful LDM run selects all three milestones by three-segment rollout64 over the full 100-trajectory, three-start, three-seed Validation protocol, evaluates the selected checkpoint again to save seed-0 arrays and shared-scale median/difficult/worst animations, then writes `validation_complete_awaiting_test` and stops.
+
+```bash
+bash tools/cylinderflow/launch_pipeline.sh \
+  /path/to/python \
+  /runs/cylinderflow_raw600_data \
+  /runs/text2pde_raw_mgn_1plus24_rollout64 \
+  20260901a \
+  /runs/cylinderflow_raw600_preflight/summary.json
 ```
 
-### Latent Diffusion Model
-To train a latent diffusion model:
-```
-python train_ldm.py --config=path/to/config
+For a manual run, first bind the portable templates:
+
+```bash
+python -m tools.cylinderflow.materialize_config \
+  --template configs/cylinderflow/ae_1plus24_raw.yaml \
+  --prepared-dir /runs/cylinderflow_raw600_data/prepared \
+  --result-root /runs/text2pde_raw_mgn_1plus24_rollout64 \
+  --stage ae \
+  --output /runs/text2pde_raw_mgn_1plus24_rollout64/config/ae_1plus24_raw.yaml
+
+python -m tools.cylinderflow.materialize_config \
+  --template configs/cylinderflow/ldm_1plus24_raw.yaml \
+  --prepared-dir /runs/cylinderflow_raw600_data/prepared \
+  --result-root /runs/text2pde_raw_mgn_1plus24_rollout64 \
+  --stage ldm \
+  --output /runs/text2pde_raw_mgn_1plus24_rollout64/config/ldm_1plus24_raw.yaml
 ```
 
-Example: train a small-size LDM for the NS2D dataset with text conditioning
-```
-python train_ldm.py --config=configs/ns2D/ldm/text/ldm_DiTSmall_text.yaml
+Then train AE, select it, train LDM, select it by rollout64, and run full Validation:
+
+```bash
+python train_AE.py \
+  --config /runs/text2pde_raw_mgn_1plus24_rollout64/config/ae_1plus24_raw.yaml
+
+python -m tools.cylinderflow.select_ae \
+  --config /runs/text2pde_raw_mgn_1plus24_rollout64/config/ae_1plus24_raw.yaml \
+  --checkpoint-dir /runs/text2pde_raw_mgn_1plus24_rollout64/ae/formal/checkpoints \
+  --manifest /runs/cylinderflow_raw600_data/prepared/validation_monitor_windows_25.json \
+  --output-dir /runs/text2pde_raw_mgn_1plus24_rollout64/ae/selection_v1
+
+python train_ldm.py \
+  --config /runs/text2pde_raw_mgn_1plus24_rollout64/config/ldm_1plus24_raw.yaml \
+  --first-stage-checkpoint /path/to/selected_ae.ckpt
+
+python -m tools.cylinderflow.evaluate_rollout \
+  --mode select \
+  --config /runs/text2pde_raw_mgn_1plus24_rollout64/config/ldm_1plus24_raw.yaml \
+  --ae-checkpoint /path/to/selected_ae.ckpt \
+  --checkpoint-dir /runs/text2pde_raw_mgn_1plus24_rollout64/ldm/formal/checkpoints \
+  --manifest /runs/cylinderflow_raw600_data/prepared/validation_full_rollout64.json \
+  --output-dir /runs/text2pde_raw_mgn_1plus24_rollout64/evaluation/ldm_selection_v1 \
+  --seeds 0 1 2 \
+  --ddim-steps 20
+
+python -m tools.cylinderflow.evaluate_rollout \
+  --mode validation \
+  --config /runs/text2pde_raw_mgn_1plus24_rollout64/config/ldm_1plus24_raw.yaml \
+  --ae-checkpoint /path/to/selected_ae.ckpt \
+  --checkpoint /path/to/selected_ldm.ckpt \
+  --manifest /runs/cylinderflow_raw600_data/prepared/validation_full_rollout64.json \
+  --output-dir /runs/text2pde_raw_mgn_1plus24_rollout64/evaluation/validation_v1 \
+  --seeds 0 1 2 \
+  --ddim-steps 20 \
+  --save-first-seed \
+  --render-representative-gifs
 ```
 
-### Baselines
-To train a baseline model for the cylinder flow problem:
-```
-python train_{gino/gnn/oformer}.py --config=path/to/config 
-```
-To train a baseline model for the smoke buoyancy (ns2D) problem:
-```
-python train_{ns2D/acdm}.py --config=path/to/config
-```
-Note that the FNO, Unet, and Resnet models all use the same script (train_ns2D.py).
+Resume either trainer by adding `--checkpoint .../checkpoints/last.ckpt`. The checkpoint stores model, optimizer, scheduler, exact examples-seen cursor, and Python/NumPy/CPU/CUDA RNG states. The deterministic sampler resumes the same fixed Train permutation.
 
-Example: train a FNO baseline on the NS2D dataset
-```
-python train_ns2D.py --config=configs/ns2D/baselines/fno.yaml
-```
+## 4. Independent Test launcher
 
-### Validation/Inference
-To generate reconstructed samples on the validation set and evaluate a mean reconstruction loss on cuda:0:
-```
-python validate_AE.py --config=path/to/config --device="cuda:0"
+Run this command only after reviewing the full Validation report and accepting the locked checkpoint. This is the only provided workflow that accepts the raw Test TFRecord.
+
+```bash
+bash tools/cylinderflow/run_test_stage.sh \
+  /path/to/python \
+  /data/mgn/cylinder_flow/meta.json \
+  /data/mgn/cylinder_flow/test.tfrecord \
+  /runs/cylinderflow_raw600_data \
+  /runs/text2pde_raw_mgn_1plus24_rollout64 \
+  /runs/cylinderflow_raw600_test_data
 ```
 
-For baselines (not including ACDM), to generate predicted samples on the validation set and evaluate a mean prediction loss:
-```
-python validate_{cylinder/ns2D}.py --config=path/to/config
-```
+The launcher requires a clean source tree at the training commit, verifies the locked AE/LDM/config/Train data identities, materializes Test into a separate tree, and evaluates exactly the locked checkpoint. It refuses an existing Test output path.
 
-For LDM and ACDM models, to conditionally sample from the validation set and evaluate and mean prediction loss:
-```
-python validate_ldm.py --config=path/to/config
-```
+## Evaluation outputs
 
-Example: sample a pretrained medium-size LDM by conditioning on text in a cylinder validation set.
-```
-python validate_ldm.py --config=configs/cylinder/ldm/text/ldm_DiT_text.yaml
-```
+The evaluator reports:
 
-### FLOPs profiling
+- area-weighted future UV relative RMSE;
+- raw and gauge-free pressure RMSE;
+- piecewise-linear triangle vorticity and divergence RMSE;
+- kinetic-energy and enstrophy errors/correlations;
+- temporal velocity-spectrum error and energy phase lag;
+- inlet, outlet, wall, and all-boundary UV errors using raw MGN node types;
+- per-frame errors, the `24->25` and `48->49` rollout seams, failure count;
+- end-to-end three-call time and peak allocated/reserved GPU memory.
 
-Configs passed to validation scripts can also be used to generate a corresponding FLOPs profile: 
-```
-python profile_flops.py --config=path/to/config
-```
+Seed-0 `.npz` files record the raw frame indices, physical time, segment seeds, and whether each segment condition came from truth or a prior prediction. GIF truth/prediction panels use the same color limits, and the median, difficult (P90-ranked), and worst selected clips share one recorded scale set.
 
-Example: Profile FLOPs of large LDM model on NS2D with text conditioning:
-```
-python profile_flops.py --config=configs/ns2D/ldm/text/ldm_FiTLarge_text.yaml
-```
+## Tests
 
-## Text Captioning
-Scripts for captioning PDE simulations are in the [text](text) directory, along with some details.
-
-## Compatibility
-Some parts of the code relies on [Open3D](https://www.open3d.org/). Specifically, Open3D requires a version of torch <=2.0.1; this option can be disabled in the config files if the installation is not compatible, and the codebase can fall back to a native PyTorch implementation. This is slower and requires more memory, but can be set with the flag use_open3d=False in all configs.
-
-Additionally, there are certain reports of FFT failing for pytorch-cuda <=11.7 ([issue](https://github.com/pytorch/pytorch/issues/88038)). Only the FNO and GINO baselines make use of FFT.
-
-Lastly, the smoke buoyancy problem relies on the torchdata and datapipes [package](https://github.com/pytorch/data), which will be deprecated in the future. This may also cause compatibility issues with newer versions of torch (>=2.0.1), specifically:
-
-```
-File "/home/anaconda3/envs/env-name/lib/python3.11/site-packages/torchdata/datapipes/iter/util/cacheholder.py", line 24, in <module>
-    from torch.utils._import_utils import dill_available
-ModuleNotFoundError: No module named 'torch.utils._import_utils'
+```bash
+python -m unittest discover -s tests
+python -m compileall dataset modules tools train_AE.py train_ldm.py
+bash -n tools/cylinderflow/launch_pipeline.sh
+bash -n tools/cylinderflow/run_ae_stage.sh
+bash -n tools/cylinderflow/run_ldm_stage.sh
+bash -n tools/cylinderflow/run_test_stage.sh
+bash -n tools/cylinderflow/run_gpu_smoke.sh
 ```
 
-A workaround is to define a function to always return false:
+The focused tests cover raw 600-frame decoding, all 576 contiguous starts, Train-only statistics, split/Test isolation, three-segment information flow and `[65,N,3]` stitching, deterministic segment seeds, mesh diagnostics, and interrupted-versus-uninterrupted sample order, RNG draws, LR, next loss, and final weight.
 
-```
-cd /path-to-conda-env/lib/python3.11/site-packages/torch/utils
-echo "def dill_available(): return False" > _import_utils.py
-```
+## Legacy: OpenLB multi-geometry `1 -> 64`
 
-## SLURM Users
-For those leveraging multiprocessing on a SLURM cluster, there are some additional considerations:
-- If you plan on training the model with text capabilities, it is recommended to manually download the pretrained LLM weights (RoBERTa) and load them [locally](https://stackoverflow.com/questions/64001128/load-a-pre-trained-model-from-disk-with-huggingface-transformers), as downloading weights on the fly may cause the script to hang. RoBERTa weights can be found [here](https://huggingface.co/FacebookAI/roberta-base/tree/main). 
+The earlier user-generated OpenLB multi-geometry implementation remains unchanged as a legacy workflow:
 
-```
-# On the fly. Might cause the script to hang.
-tokenizer = AutoTokenizer.from_pretrained("FacebookAI/roberta-base") 
-model = RobertaModel.from_pretrained("FacebookAI/roberta-base")
+- configs: `configs/multigeometry/ae_1plus64.yaml` and `configs/multigeometry/ldm_1plus64.yaml`;
+- tools: `tools/multigeometry/`;
+- handoff record: `docs/MULTIGEOMETRY_1PLUS64_HANDOFF.md`.
 
- # Loading weights locally. Safer option.
-tokenizer = AutoTokenizer.from_pretrained(cache_path, local_files_only=True)
-model = RobertaModel.from_pretrained(cache_path, local_files_only=True)
-```
+That path jointly models one clean frame plus 64 future frames from the OpenLB `408/24/24` split. Its checkpoints, manifests, and evaluation protocol are independent of the raw-MGN `1 -> 24`, three-call rollout64 experiment.
 
-- You may need to limit the number of train/val batches per epoch if using datapipes. In some DDP cases, having incomplete batches can cause GPUs to hang. [Issue](https://github.com/Lightning-AI/pytorch-lightning/issues/11910)
+## Upstream Text2PDE
+
+This repository is based on [Text2PDE: Latent Diffusion Models for Accessible Physics Simulation](https://arxiv.org/abs/2410.01153). Upstream datasets and pretrained models are linked from [ayz2/ldm_pdes](https://huggingface.co/datasets/ayz2/ldm_pdes). Existing cylinder, NS2D, baseline, captioning, and profiling code remains available under `configs/`, `dataset/`, `text/`, and the original training/validation entry points.
+
+Open3D in the upstream stack may require PyTorch `<=2.0.1`; setting `use_open3d: false` uses the native PyTorch path at higher memory cost. The checked-in formal configs preserve the established Open3D setting and must be preflighted in the actual training environment.
