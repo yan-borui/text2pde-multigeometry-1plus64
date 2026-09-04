@@ -13,18 +13,18 @@ from dataset.cylinderflow_stride8 import CylinderFlowStride8TrajectoryDataset
 from tools.cylinderflow_stride8.verify_data import verify
 
 
-EXPECTED_FILES = sorted(
-    [
-        "LICENSE",
-        "NOTICE",
-        "README.md",
-        "TEST_NOT_ACCESSED.txt",
-        "data/cylinderflow_stride8_75frames.h5",
-        "metadata/cylinderflow_stride8_75frames_manifest.json",
-        "metadata/dataset_audit.json",
-        "metadata/train_normal_stats.pkl",
-    ]
-)
+EXPECTED_RELEASE_FILES = [
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "TEST_NOT_ACCESSED.txt",
+    "data/cylinderflow_stride8_75frames.h5",
+    "metadata/cylinderflow_stride8_75frames_manifest.json",
+    "metadata/dataset_audit.json",
+    "metadata/train_normal_stats.pkl",
+]
+EXPECTED_PLATFORM_FILES = [".gitattributes"]
+EXPECTED_FILES = sorted(EXPECTED_PLATFORM_FILES + EXPECTED_RELEASE_FILES)
 EXPECTED_NORMALIZER = [
     0.5661443793145688,
     0.57014025360096,
@@ -94,6 +94,8 @@ def verify_download(root: Path, revision: str) -> dict[str, object]:
         "revision": revision,
         "root": str(root),
         "files": files,
+        "release_payload_files": sorted(EXPECTED_RELEASE_FILES),
+        "platform_files": sorted(EXPECTED_PLATFORM_FILES),
         "identity": identity,
         "trajectory_groups": 1100,
         "split_counts": {"train": 1000, "validation": 100},
