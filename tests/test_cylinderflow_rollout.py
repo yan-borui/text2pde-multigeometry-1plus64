@@ -81,6 +81,35 @@ class CylinderFlowRolloutTest(unittest.TestCase):
         self.assertEqual(metrics["divergence_rmse"], 0.0)
         self.assertEqual(len(metrics["per_frame_uv_relative_rmse"]), 65)
 
+    def test_joint64_metrics_use_stride8_physical_dt_without_segment_seams(
+        self,
+    ) -> None:
+        points = np.array(
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            dtype=np.float64,
+        )
+        cells = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int64)
+        node_type = np.array([4, 5, 6, 0], dtype=np.int32)
+        target = np.zeros((65, 4, 3), dtype=np.float64)
+        waveform = 1.5 + 0.4 * np.sin(np.arange(65) * 0.35)
+        target[..., 0] = waveform[:, None]
+        prediction = target.copy()
+        prediction[2:, :, 0] = target[1:-1, :, 0]
+        metrics = compute_metrics(
+            prediction,
+            target,
+            points,
+            cells,
+            node_type,
+            dt=0.08,
+            include_segment_seams=False,
+        )
+        self.assertAlmostEqual(
+            metrics["energy_best_lag_time"],
+            metrics["energy_best_lag_frames"] * 0.08,
+        )
+        self.assertFalse(any(name.startswith("seam_") for name in metrics))
+
 
 if __name__ == "__main__":
     unittest.main()

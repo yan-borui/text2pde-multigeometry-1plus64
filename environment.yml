@@ -60,7 +60,6 @@ dependencies:
   - gnutls=3.6.15=he1e5248_0
   - grpc-cpp=1.48.2=he1ff14a_1
   - gtest=1.14.0=hdb19cb5_1
-  - hdf5=1.12.1=h2b7332f_3
   - huggingface_hub=0.23.1=py311h06a4308_0
   - icu=73.1=h6a678d5_0
   - intel-openmp=2023.1.0=hdb19cb5_46306
@@ -213,7 +212,7 @@ dependencies:
     - gmpy2==2.1.2
     - grpcio==1.48.2
     - h11==0.14.0
-    - h5py==3.11.0
+    - h5py==3.16.0
     - hjson==3.1.0
     - httpcore==1.0.5
     - httpx==0.27.0

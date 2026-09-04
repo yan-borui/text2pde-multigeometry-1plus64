@@ -1,0 +1,98 @@
+model_name: ae
+
+data:
+  batch_size: 1
+  num_workers: 0
+  mode: cylinderflow_stride8
+  drop_last: false
+  sampler_seed: 42
+  train_examples_seen: 0
+  dataset:
+    data_path: null
+    manifest: null
+    strict_formal_counts: true
+    use_embed: false
+  normalizer:
+    use_norm: true
+    scaler: normal
+    stat_path: null
+    recalculate: false
+    conditional: false
+
+model:
+  aeconfig:
+    double_z: true
+    latent_grid_size: 64
+    encoder:
+      in_channels: 3
+      out_channels: 16
+      hidden_channels: 64
+      z_channels: 16
+      resolution: 64
+      ch_mult: [1, 2, 4]
+      num_res_blocks: 2
+      attn_resolutions: [16]
+      dropout: 0.1
+      double_z: true
+      tanh_out: false
+      gno_coord_dim: 3
+      gno_coord_embed_dim: 16
+      gno_radius: 0.0425
+      gno_mlp_hidden_layers: [64, 64, 64, 64]
+      gno_transform_type: linear
+      gno_use_torch_scatter: true
+      use_open3d: true
+      query_chunk_size: null
+    decoder:
+      in_channels: 16
+      out_channels: 3
+      hidden_channels: 64
+      z_channels: 16
+      resolution: 64
+      ch_mult: [1, 2, 4]
+      num_res_blocks: 2
+      attn_resolutions: [16]
+      dropout: 0.1
+      double_z: true
+      tanh_out: false
+      gno_coord_dim: 3
+      gno_coord_embed_dim: 16
+      gno_radius: 0.0425
+      gno_mlp_hidden_layers: [64, 64, 64, 64]
+      gno_transform_type: linear
+      gno_use_torch_scatter: true
+      use_open3d: true
+      query_chunk_size: null
+  lossconfig:
+    kl_weight: 2.0e-07
+
+training:
+  seed: 42
+  accelerator: gpu
+  devices: 1
+  strategy: auto
+  precision: 16-mixed
+  deterministic: false
+  accumulate_grad_batches: 4
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 0
+  enable_plot_callback: false
+  logger: csv
+  log_every_n_steps: 20
+  last_every_n_steps: 5000
+  milestone_every_n_steps: 62500
+  checkpoint: null
+  dataset_size: 1000
+  max_epochs: 1000
+  max_steps: 250000
+  learning_rate: 1.0e-05
+  pct_start: 0.15
+  scheduler: Cosine
+  dist: false
+  limit_val_batches: 24
+  default_root_dir: null
+  run_dir: null
+
+wandb:
+  name: Text2PDE_MGN_CylinderFlow_stride8_AE_1plus64_
+  project: text2pde_matched_baseline

@@ -40,10 +40,14 @@ def main(args):
 
     seed = trainconfig["seed"]
     start_examples_seen = 0
-    if dataconfig["mode"] == "cylinderflow_windows" and trainconfig["checkpoint"]:
+    exact_resume_modes = ("cylinderflow_windows", "cylinderflow_stride8")
+    if dataconfig["mode"] in exact_resume_modes and trainconfig["checkpoint"]:
         resume_record = load_resume_record(trainconfig["checkpoint"])
         start_examples_seen = int(resume_record["examples_seen"])
-        dataconfig["train_start_offset"] = start_examples_seen
+        if dataconfig["mode"] == "cylinderflow_stride8":
+            dataconfig["train_examples_seen"] = start_examples_seen
+        else:
+            dataconfig["train_start_offset"] = start_examples_seen
     now = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     seed_everything(seed)
 
@@ -74,7 +78,7 @@ def main(args):
     checkpoint_dir = os.path.join(path, "checkpoints")
     milestone_steps = trainconfig.get("milestone_every_n_steps")
     callbacks = []
-    if dataconfig["mode"] == "cylinderflow_windows":
+    if dataconfig["mode"] in exact_resume_modes:
         callbacks.append(ExactResumeCallback(start_examples_seen))
     callbacks.extend(
         [
@@ -108,7 +112,11 @@ def main(args):
 
         if trainconfig.get("enable_plot_callback", True):
             callbacks.append(MeshLDMCallback())
-    elif dataconfig["mode"] in ("multigeometry", "cylinderflow_windows"):
+    elif dataconfig["mode"] in (
+        "multigeometry",
+        "cylinderflow_windows",
+        "cylinderflow_stride8",
+    ):
         from modules.models.ddpm import LatentDiffusion
     else:
         raise ValueError(f"Unsupported data mode: {dataconfig['mode']}")

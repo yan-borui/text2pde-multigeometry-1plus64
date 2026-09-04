@@ -20,6 +20,7 @@ class FluidsDataModule(L.LightningDataModule):
         self.normalizer = None
         self.sampler_seed = int(dataconfig.get("sampler_seed", 0))
         self.train_start_offset = int(dataconfig.get("train_start_offset", 0))
+        self.train_examples_seen = int(dataconfig.get("train_examples_seen", 0))
 
         if "drop_last" in dataconfig.keys():
             self.drop_last = dataconfig["drop_last"]
@@ -73,6 +74,30 @@ class FluidsDataModule(L.LightningDataModule):
                 manifest_path=dataset_config["validation_manifest"],
             )
 
+        elif self.mode == "cylinderflow_stride8":
+            from dataset.cylinderflow_stride8 import (
+                CylinderFlowStride8TrajectoryDataset,
+            )
+
+            if self.num_workers != 0:
+                raise ValueError(
+                    "cylinderflow_stride8 requires num_workers=0 for a safe lazy "
+                    "HDF5 handle"
+                )
+            shared = {
+                "manifest_path": dataset_config["manifest"],
+                "data_path": dataset_config["data_path"],
+                "strict_formal_counts": dataset_config.get(
+                    "strict_formal_counts", True
+                ),
+            }
+            self.train_dataset = CylinderFlowStride8TrajectoryDataset(
+                split="train", **shared
+            )
+            self.val_dataset = CylinderFlowStride8TrajectoryDataset(
+                split="validation", **shared
+            )
+
         else:
             raise ValueError(f"Unsupported data mode: {self.mode}")
 
@@ -108,6 +133,17 @@ class FluidsDataModule(L.LightningDataModule):
                 self.train_dataset,
                 seed=self.sampler_seed,
                 start_offset=self.train_start_offset,
+            )
+            shuffle = False
+        elif self.mode == "cylinderflow_stride8":
+            from modules.modules.reproducible_resume import (
+                DeterministicEpochPermutationSampler,
+            )
+
+            sampler = DeterministicEpochPermutationSampler(
+                self.train_dataset,
+                seed=self.sampler_seed,
+                start_examples_seen=self.train_examples_seen,
             )
             shuffle = False
         return DataLoader(

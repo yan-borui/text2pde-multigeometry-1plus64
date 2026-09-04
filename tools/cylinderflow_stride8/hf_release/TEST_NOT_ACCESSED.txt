@@ -1,0 +1,5 @@
+MeshGraphNets CylinderFlow Test fields were not accessed while preparing this release.
+
+This public artifact contains exactly 1,000 Train trajectories and 100 Validation
+trajectories. It contains no Test trajectories, Test fields, Test metrics, or Test
+selection decisions.

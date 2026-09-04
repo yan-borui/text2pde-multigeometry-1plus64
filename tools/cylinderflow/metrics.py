@@ -195,6 +195,7 @@ def compute_metrics(
     cells: np.ndarray,
     node_type: np.ndarray,
     dt: float,
+    include_segment_seams: bool = True,
 ) -> dict[str, Any]:
     if prediction.shape != target.shape or prediction.ndim != 3:
         raise ValueError("prediction and target must have matching shape [T,N,3]")
@@ -318,8 +319,9 @@ def compute_metrics(
         "frame49_uv_relative_rmse": per_frame_uv[49],
         "frame64_uv_relative_rmse": per_frame_uv[64],
     }
-    metrics.update(_seam_metrics(prediction, target, weights, 24))
-    metrics.update(_seam_metrics(prediction, target, weights, 48))
+    if include_segment_seams:
+        metrics.update(_seam_metrics(prediction, target, weights, 24))
+        metrics.update(_seam_metrics(prediction, target, weights, 48))
     return metrics
 
 
@@ -343,6 +345,18 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "window_length",
                 "frame_stride",
                 "frame_dt",
+                "raw_frame_dt",
+                "temporal_stride",
+                "phase_offset",
+                "sequence_start",
+                "sequence_length",
+                "stored_frame_count",
+                "raw_frame_start",
+                "raw_frame_stop_inclusive",
+                "source_local_index",
+                "evaluation_seed",
+                "sampler_seed",
+                "ddim_steps",
             }
         }
     )
@@ -406,7 +420,10 @@ def shared_visual_scales(npz_paths: Iterable[Path]) -> dict[str, float]:
 
 
 def render_comparison_gif(
-    npz_path: Path, output_path: Path, scales: dict[str, float]
+    npz_path: Path,
+    output_path: Path,
+    scales: dict[str, float],
+    segment_seams: tuple[int, ...] = (24, 48),
 ) -> None:
     data = np.load(npz_path, allow_pickle=False)
     target = data["target"]
@@ -484,7 +501,7 @@ def render_comparison_gif(
             axis.set_axis_off()
             fig.colorbar(artist, ax=axis, fraction=0.046, pad=0.02)
         seam_label = ""
-        if frame_index in (24, 25, 48, 49):
+        if any(frame_index in (left, left + 1) for left in segment_seams):
             seam_label = " | rollout seam neighborhood"
         fig.suptitle(
             f"raw frame {int(data['frame_indices'][frame_index])}, "

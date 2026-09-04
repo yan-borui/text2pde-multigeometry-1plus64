@@ -1,0 +1,20 @@
+MeshGraphNets CylinderFlow phase-0 stride-8 derivative
+
+This release contains a transformed copy of the CylinderFlow dataset distributed
+with the Google DeepMind MeshGraphNets research release:
+https://github.com/google-deepmind/deepmind-research/tree/master/meshgraphnets
+
+Upstream work:
+Tobias Pfaff et al., "Learning Mesh-Based Simulation with Graph Networks," ICLR
+2021, https://arxiv.org/abs/2010.03409.
+
+Transformation and packaging:
+- preserved the upstream 1,000 Train / 100 Validation trajectory identities;
+- selected one phase-zero temporal sequence per trajectory with raw indices
+  0,8,...,592;
+- packed UVP, mesh coordinates, triangle cells, and node types into HDF5;
+- computed the published normalization statistics from Train trajectories only.
+
+The artifact is a temporal derivative of MeshGraphNets CylinderFlow, not an
+independent simulation family. Test fields were not accessed or redistributed.
+See LICENSE for the Apache License, Version 2.0 terms.

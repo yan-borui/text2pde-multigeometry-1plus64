@@ -1,0 +1,159 @@
+model_name: ldm
+
+data:
+  batch_size: 1
+  num_workers: 0
+  mode: cylinderflow_stride8
+  drop_last: false
+  sampler_seed: 42
+  train_examples_seen: 0
+  dataset:
+    data_path: null
+    manifest: null
+    strict_formal_counts: true
+    use_embed: false
+  normalizer:
+    use_norm: true
+    scaler: normal
+    stat_path: null
+    recalculate: false
+    conditional: false
+
+training:
+  seed: 42
+  accelerator: gpu
+  devices: 1
+  strategy: auto
+  precision: 16-mixed
+  deterministic: false
+  accumulate_grad_batches: 4
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 0
+  enable_plot_callback: false
+  logger: csv
+  log_every_n_steps: 20
+  last_every_n_steps: 5000
+  milestone_every_n_steps: 62500
+  gradient_clip_val: 0
+  checkpoint: null
+  dataset_size: 1000
+  max_epochs: 1000
+  max_steps: 250000
+  limit_val_batches: 24
+  default_root_dir: null
+  run_dir: null
+
+wandb:
+  name: Text2PDE_MGN_CylinderFlow_stride8_LDM_1plus64_
+  project: text2pde_matched_baseline
+
+model:
+  base_learning_rate: 5.0e-05
+  beta_schedule: linear
+  cosine_s: 0.008
+  linear_start: 0.00085
+  linear_end: 0.012
+  num_timesteps_cond: 1
+  log_every_t: 200
+  timesteps: 1000
+  image_size: [16, 16, 16]
+  channels: 16
+  batch_size: 1
+  cond_stage_trainable: true
+  scale_factor: 0.2
+  clip_denoised: false
+  parameterization: eps
+  monitor: val/loss
+  dist: false
+  scheduler_config:
+    scheduler: cosine
+  model_config:
+    input_size: [16, 16, 16]
+    patch_size: [2, 2, 2]
+    in_channels: 16
+    hidden_size: 512
+    depth: 24
+    num_heads: 16
+    mlp_ratio: 4.0
+    learn_sigma: false
+    use_cross_attn: true
+    context_dim: 128
+    dim: 3
+    gradient_checkpointing: false
+  first_stage_config:
+    pretrained_path: __SELECTED_AE_CHECKPOINT__
+    aeconfig:
+      double_z: true
+      latent_grid_size: 64
+      encoder:
+        in_channels: 3
+        out_channels: 16
+        hidden_channels: 64
+        z_channels: 16
+        resolution: 64
+        ch_mult: [1, 2, 4]
+        num_res_blocks: 2
+        attn_resolutions: [16]
+        dropout: 0.1
+        double_z: true
+        tanh_out: false
+        gno_coord_dim: 3
+        gno_coord_embed_dim: 16
+        gno_radius: 0.0425
+        gno_mlp_hidden_layers: [64, 64, 64, 64]
+        gno_transform_type: linear
+        gno_use_torch_scatter: true
+        use_open3d: true
+        query_chunk_size: null
+      decoder:
+        in_channels: 16
+        out_channels: 3
+        hidden_channels: 64
+        z_channels: 16
+        resolution: 64
+        ch_mult: [1, 2, 4]
+        num_res_blocks: 2
+        attn_resolutions: [16]
+        dropout: 0.1
+        double_z: true
+        tanh_out: false
+        gno_coord_dim: 3
+        gno_coord_embed_dim: 16
+        gno_radius: 0.0425
+        gno_mlp_hidden_layers: [64, 64, 64, 64]
+        gno_transform_type: linear
+        gno_use_torch_scatter: true
+        use_open3d: true
+        query_chunk_size: null
+    lossconfig:
+      kl_weight: 2.0e-07
+    training:
+      dist: false
+      learning_rate: 1.0e-05
+      scheduler: Cosine
+      max_steps: 250000
+      max_epochs: 1000
+      dataset_size: 1000
+  cond_stage_config:
+    conditional: true
+    out_dim: 128
+    pretrained: false
+    encoder:
+      in_channels: 3
+      out_channels: 128
+      hidden_channels: 128
+      z_channels: 128
+      resolution: 32
+      ch_mult: [1, 2, 4]
+      num_res_blocks: 2
+      attn_resolutions: [8]
+      dropout: 0.0
+      double_z: false
+      gno_coord_dim: 2
+      gno_coord_embed_dim: 32
+      gno_radius: 0.05
+      gno_mlp_hidden_layers: [128, 128, 128]
+      gno_transform_type: nonlinear
+      gno_use_torch_scatter: true
+      use_open3d: false
+      query_chunk_size: null

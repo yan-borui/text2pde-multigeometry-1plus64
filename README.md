@@ -1,10 +1,75 @@
-# Text2PDE on raw MeshGraphNets CylinderFlow: `1 -> 24 -> rollout64`
+# Text2PDE on MeshGraphNets CylinderFlow
+
+## Phase-zero stride-8 joint `1 -> 64` workflow
+
+The `feature/cylinderflow-stride8-1plus64` workflow retrains the established
+Text2PDE DiTSmall-FF model on
+[`DingDong1921/mgn-cylinderflow-stride8-75frames`](https://huggingface.co/datasets/DingDong1921/mgn-cylinderflow-stride8-75frames).
+The release preserves 75 phase-zero frames per trajectory. The loader produces
+exactly one sample per trajectory from the first 65 frames: raw indices
+`0,8,...,512`, shape `[65,N,3]`, and physical `dt=0.08`. There are 1,000 Train
+samples and 100 Validation samples. No sliding-window start or alternate temporal
+phase exists in this workflow.
+
+The configs are `configs/cylinderflow_stride8/ae_1plus64.yaml` and
+`configs/cylinderflow_stride8/ldm_1plus64.yaml`. They retain the `64^3` GINO AE,
+16-channel latent, DiT hidden size 512/depth 24/16 heads, and 1,000-step diffusion
+schedule. Both stages use microbatch 1, gradient accumulation 4, FP16, seed 42,
+1,000 epochs, and 250,000 optimizer steps. Candidate checkpoints are steps
+62,500, 125,000, 187,500, and 250,000; `last.ckpt` is updated every 5,000 steps.
+The epoch-aware sampler uses the permutation determined by `seed + epoch`, and
+the resume record restores the exact example cursor and Python/NumPy/CPU/CUDA RNG
+states across epoch boundaries.
+
+Bind downloaded data to the portable configs without starting training:
+
+```bash
+python -m tools.cylinderflow_stride8.materialize_config \
+  --template configs/cylinderflow_stride8/ae_1plus64.yaml \
+  --data /data/cylinderflow_stride8_75frames.h5 \
+  --manifest /data/cylinderflow_stride8_75frames_manifest.json \
+  --normalizer /data/train_normal_stats.pkl \
+  --result-root /runs/text2pde_stride8_joint64 \
+  --stage ae \
+  --output /runs/text2pde_stride8_joint64/config/ae_1plus64.yaml
+```
+
+The corresponding `ldm` command uses the LDM template and `--stage ldm`. A
+future formal launch can run both stages with:
+
+```bash
+bash tools/cylinderflow_stride8/launch_pipeline.sh \
+  /path/to/python \
+  /data/cylinderflow_stride8_75frames.h5 \
+  /data/cylinderflow_stride8_75frames_manifest.json \
+  /data/train_normal_stats.pkl \
+  /runs/text2pde_stride8_joint64 \
+  20260904a \
+  0
+```
+
+AE selection uses 24 fixed, uniformly covering Validation trajectories. LDM
+selection uses the same 24 trajectories with sampling seeds `0/1/2`. Final
+Validation covers all `100 x 3 = 300` trajectory-seed samples. Each prediction
+uses one 20-step deterministic DDIM call: true frame 0 is the only field passed
+to the conditioner, decoder frame 0 is discarded, and decoded frames 1 through
+64 form the forecast. The evaluator performs no three-segment autoregressive
+stitching. It reports UV, raw and gauge-free pressure, vorticity, divergence,
+energy/enstrophy, temporal spectrum, phase/correlation, boundary errors, failures,
+and inference cost; it saves all seed-0 arrays with raw frame/time identity and
+shared-scale favorable/median/difficult/worst GIFs.
+
+This workflow exposes only `select` and `validation` evaluator modes. It has no
+Test entry. The pre-existing raw-grid Test launcher remains confined to the
+legacy workflow below.
+
+## Legacy raw-grid `1 -> 24 -> rollout64` workflow
 
 This fork trains Text2PDE from random initialization on the original, untemporally-subsampled MeshGraphNets CylinderFlow trajectories. One Text2PDE call consumes one clean UVP frame and generates 24 future frames. Evaluation calls that model three times autoregressively and keeps 64 future frames for a frame-aligned comparison with a `1 -> 64` model.
 
 The repository contains code and manifests only. It does not redistribute the MeshGraphNets data or newly trained checkpoints.
 
-## Locked protocol
+## Legacy raw-grid locked protocol
 
 - Source: original MeshGraphNets CylinderFlow TFRecords, with `1000/100/100` Train/Validation/Test trajectories.
 - Every trajectory has 600 frames at physical `dt=0.01`; frame stride is always 1.
@@ -32,6 +97,10 @@ The upstream environment remains in `environment.yml`. The raw reader is self-co
 conda env create -n text2pde -f environment.yml
 conda activate text2pde
 ```
+
+The stride-8 release was written with HDF5 2.0 object layouts. Its loader requires
+the checked-in `h5py==3.16.0` wheel (or another h5py build linked against
+HDF5 2.0 or newer); older HDF5 1.14 runtimes cannot open the stored datasets.
 
 Use `num_workers: 0` for this HDF5 workflow. The checked-in CylinderFlow configs already enforce it.
 
@@ -178,6 +247,9 @@ Seed-0 `.npz` files record the raw frame indices, physical time, segment seeds, 
 ```bash
 python -m unittest discover -s tests
 python -m compileall dataset modules tools train_AE.py train_ldm.py
+bash -n tools/cylinderflow_stride8/launch_pipeline.sh
+bash -n tools/cylinderflow_stride8/run_ae_stage.sh
+bash -n tools/cylinderflow_stride8/run_ldm_stage.sh
 bash -n tools/cylinderflow/launch_pipeline.sh
 bash -n tools/cylinderflow/run_ae_stage.sh
 bash -n tools/cylinderflow/run_ldm_stage.sh
@@ -185,7 +257,12 @@ bash -n tools/cylinderflow/run_test_stage.sh
 bash -n tools/cylinderflow/run_gpu_smoke.sh
 ```
 
-The focused tests cover raw 600-frame decoding, all 576 contiguous starts, Train-only statistics, split/Test isolation, three-segment information flow and `[65,N,3]` stitching, deterministic segment seeds, mesh diagnostics, and interrupted-versus-uninterrupted sample order, RNG draws, LR, next loss, and final weight.
+The focused tests additionally cover the stride-8 loader shape and exact raw-frame
+identity, unique-prefix enforcement, trajectory split isolation, released
+normalizer format, joint64 information flow, `dt=0.08` metrics, fixed protocol
+configuration, absence of a new Test entry, and exact resume across epoch
+boundaries. Legacy tests continue to cover raw 600-frame decoding, contiguous
+windows, three-segment stitching, and the existing Test gate.
 
 ## Legacy: OpenLB multi-geometry `1 -> 64`
 

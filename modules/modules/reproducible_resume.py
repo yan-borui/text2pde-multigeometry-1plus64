@@ -39,6 +39,57 @@ class DeterministicPermutationSampler(Sampler[int]):
         return len(self.data_source) - self.start_offset
 
 
+class DeterministicEpochPermutationSampler(Sampler[int]):
+    """Deterministic ``seed + epoch`` permutations with an exact global cursor.
+
+    ``start_examples_seen`` counts examples, rather than optimizer steps. This is
+    important for gradient accumulation: with 1000 trajectories and accumulation
+    four, examples 0--999 form epoch 0 and optimizer steps 0--249.
+    """
+
+    def __init__(
+        self,
+        data_source: Sized,
+        seed: int,
+        start_examples_seen: int = 0,
+    ) -> None:
+        self.data_source = data_source
+        self.seed = int(seed)
+        self.start_examples_seen = int(start_examples_seen)
+        self.epoch_size = len(self.data_source)
+        if self.epoch_size <= 0:
+            raise ValueError("epoch-aware sampler requires a non-empty dataset")
+        if self.start_examples_seen < 0:
+            raise ValueError("start_examples_seen must be non-negative")
+        self._next_epoch, self._next_offset = divmod(
+            self.start_examples_seen, self.epoch_size
+        )
+
+    @staticmethod
+    def epoch_seed(base_seed: int, epoch: int) -> int:
+        if epoch < 0:
+            raise ValueError("epoch must be non-negative")
+        return int(base_seed) + int(epoch)
+
+    def __iter__(self) -> Iterator[int]:
+        epoch = self._next_epoch
+        offset = self._next_offset
+        # Advance before yielding. If a trainer stops midway, the persisted global
+        # cursor reconstructs this state; if it exhausts the iterator, the next
+        # call naturally starts the following epoch.
+        self._next_epoch = epoch + 1
+        self._next_offset = 0
+        generator = torch.Generator()
+        generator.manual_seed(self.epoch_seed(self.seed, epoch))
+        permutation = torch.randperm(
+            self.epoch_size, generator=generator, dtype=torch.int64
+        )
+        yield from permutation[offset:].tolist()
+
+    def __len__(self) -> int:
+        return self.epoch_size - self._next_offset
+
+
 def capture_rng_state() -> dict[str, Any]:
     state: dict[str, Any] = {
         "python": random.getstate(),
