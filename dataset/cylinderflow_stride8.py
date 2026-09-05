@@ -327,7 +327,7 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
         self._geometry_cache[global_index] = cached
         return cached
 
-    def __getitem__(self, index: int, eval: bool = False) -> dict[str, Any]:
+    def _trajectory_group(self, index: int) -> tuple[int, dict, h5py.Group]:
         global_index, record = self.resolve_trajectory(index)
         handle = self._open()
         group_name = record["group"]
@@ -344,6 +344,28 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
             raise ValueError(f"group {group_name} has the wrong temporal stride")
         if int(group.attrs.get("phase_offset", -1)) != PHASE_OFFSET:
             raise ValueError(f"group {group_name} has the wrong phase offset")
+        return global_index, record, group
+
+    def initial(self, index: int) -> dict[str, Any]:
+        """Load only the physical conditioning frame and static CPU geometry."""
+        global_index, record, group = self._trajectory_group(index)
+        initial = np.asarray(group["uvp"][:1], dtype=np.float32)
+        if (
+            initial.shape != (1, int(record["nodes"]), 3)
+            or not np.isfinite(initial).all()
+        ):
+            raise ValueError("benchmark conditioning frame must be finite [N,3]")
+        _, points, cells, node_type = self._load_geometry(global_index, group)
+        return {
+            "trajectory_index": global_index,
+            "initial": initial[0],
+            "points": points.numpy(),
+            "cells": cells.numpy(),
+            "node_type": node_type.numpy(),
+        }
+
+    def __getitem__(self, index: int, eval: bool = False) -> dict[str, Any]:
+        global_index, record, group = self._trajectory_group(index)
 
         node_count = int(record["nodes"])
         field_array = np.asarray(group["uvp"][: self.sequence_length], dtype=np.float32)
@@ -386,7 +408,7 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
                         "sample_index": int(index if index >= 0 else index + len(self)),
                         "trajectory_index": global_index,
                         "source_local_index": int(record["source_local_index"]),
-                        "group": group_name,
+                        "group": record["group"],
                         "sequence_start": SEQUENCE_START,
                         "sequence_length": self.sequence_length,
                         "stage": self.stage,

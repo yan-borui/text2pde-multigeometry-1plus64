@@ -163,6 +163,22 @@ class CylinderFlowStride8Test(unittest.TestCase):
             ae.close()
             ldm.close()
 
+    def test_benchmark_initial_loader_never_reads_future_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            data_file, manifest_file = write_fixture(Path(temporary_directory))
+            dataset = CylinderFlowStride8TrajectoryDataset(
+                manifest_file, data_file, split="validation", strict_formal_counts=False
+            )
+            expected = dataset[0]["x"][0].numpy().copy()
+            dataset.close()
+            with h5py.File(data_file, "r+") as handle:
+                handle["trajectory_0002/uvp"][1:] = np.nan
+            sample = dataset.initial(0)
+            np.testing.assert_array_equal(sample["initial"], expected)
+            self.assertEqual(sample["trajectory_index"], 2)
+            self.assertNotIn("field", sample)
+            dataset.close()
+
     def test_unique_prefix_shape_identity_and_time(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             data_path, manifest_path = write_fixture(Path(temporary_directory))

@@ -235,6 +235,10 @@ def evaluate_one_checkpoint(
         "global_step": global_step,
         "ddim_steps": DDIM_STEPS,
         "autoregressive_segments": 0,
+        "timing_scope": (
+            "native evaluation diagnostics; use tools.cylinderflow_stride8.benchmark "
+            "for matched end-to-end speed and memory comparisons"
+        ),
         "checkpoint_id": getattr(model, "_stride8_checkpoint_id", None),
         "dependencies": getattr(model, "_stride8_dependencies", {}),
         "data_contract": stage_data_contract("ldm"),

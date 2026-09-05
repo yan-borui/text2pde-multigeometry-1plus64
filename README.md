@@ -60,7 +60,7 @@ and inference cost; it saves every sampling seed, including failures, using the 
 prediction schema. It applies inlet/wall velocity writeback, aggregates within
 trajectory before population statistics, and ranks candidates by failure count,
 UV error, then earlier update. See [the staged data/evaluation contract](DATA_CONTRACT.md)
-and [verification](ALIGNMENT_VERIFICATION.json). Shared-scale seed-0
+and [verification](ALIGNMENT_VERIFICATION.json). Matched inference timing and GPU-memory accounting use [the performance benchmark](PERFORMANCE.md). Shared-scale seed-0
 favorable/median/difficult/worst GIFs remain available.
 
 This workflow exposes only `select` and `validation` evaluator modes. It has no

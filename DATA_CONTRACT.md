@@ -49,6 +49,8 @@ Offline scoring validates frame count, raw indices, physical times, and mesh axe
 
 ## Execution and evidence
 
+Cross-method inference speed and memory cost use the separate matched benchmark in [PERFORMANCE.md](PERFORMANCE.md): CPU initial state to CPU physical forecast, FP32, two warmups and three measurements per fixed Validation-24 trajectory. Native quality-evaluation timing fields remain diagnostic. The shared report comparison checks hardware/runtime, case registry and complete measurements.
+
 Existing native training budgets are retained. Keep independent method configurations, effective sample exposures, optimizer updates, training and sampling seeds, and inference timing semantics explicit; equal epochs or sample exposure do not imply equal GPU-hours.
 
 Run the repository's CPU contract tests and bounded full-model smoke checks before a target-cluster run. Target GPU/mixed-precision/maximum-mesh acceptance remains a separate check. The software verification record for this change is `ALIGNMENT_VERIFICATION.json`; `ACCEPTANCE.json` in the three adapters retains the dated prefix65 evidence. Formal model quality requires new training and Validation evidence under the updated stage contract.

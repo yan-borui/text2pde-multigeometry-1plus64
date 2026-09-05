@@ -1,0 +1,48 @@
+{
+  "schema": "cylinderflow.performance_implementation_verification.v1",
+  "observed_date": "2026-09-05",
+  "performance_protocol": "cylinderflow.initial_cpu_to_physical_cpu.fp32.v1",
+  "method": "text2pde",
+  "source_base_commit": "1d70d990749189a69d31e3fb86dbc8e7427b76b8",
+  "verification_run": "cylinderflow_speed_verify_20260905b",
+  "source_scope": "Base commit plus the performance implementation included in this release; commit-hook formatting checked by Python AST comparison.",
+  "cpu_only": true,
+  "checks": [
+    {
+      "check": "syntax",
+      "exit_code": 0
+    },
+    {
+      "check": "cylinderflow_tests",
+      "exit_code": 0
+    },
+    {
+      "check": "benchmark_cli",
+      "exit_code": 0
+    }
+  ],
+  "unit_tests": {
+    "command": "python -m unittest discover -s tests -p 'test_cylinderflow*.py' -v",
+    "run": 41,
+    "passed": 41,
+    "skipped": 0,
+    "skip_reason": null
+  },
+  "protocol_checks": [
+    "Two warmups excluded from three measured forecasts per trajectory",
+    "Model/input loading and output checks excluded from latency",
+    "Failed warmups and measured attempts retained with incomplete trajectories",
+    "GPU resident/peak/incremental byte accounting checked with mocked CUDA statistics",
+    "Mixed hardware, runtime, settings, registry and incomplete reports rejected",
+    "Measured seeds independent of warmup draws"
+  ],
+  "native_forecast_checks": null,
+  "model_scope": "CylinderFlow sampler and first-frame-only benchmark wiring with test doubles, plus real Lightning/data/dependency regression tests; no full trained LDM benchmark.",
+  "limitations": [
+    "Target GPU latency and memory not measured by this CPU verification",
+    "Synthetic debug reports cannot enter the formal cross-method comparison",
+    "Formal target measurements require matched hardware/runtime and the fixed Validation-24 registry"
+  ],
+  "formal_training_started": false,
+  "test_accessed": false
+}

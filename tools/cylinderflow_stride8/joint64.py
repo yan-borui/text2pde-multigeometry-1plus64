@@ -82,10 +82,37 @@ def sample_joint64(
     if int(ddim_steps) != DDIM_STEPS:
         raise ValueError("formal joint64 evaluation requires exactly 20 DDIM steps")
     validate_joint64_inputs(physical_sequence, position)
+    return sample_initial64(
+        model, sampler, physical_sequence[:, :1], position, ddim_steps
+    )
+
+
+@torch.inference_mode()
+def sample_initial64(
+    model: LatentDiffusion,
+    sampler: DDIMSampler,
+    physical_initial: torch.Tensor,
+    position: torch.Tensor,
+    ddim_steps: int = DDIM_STEPS,
+    *,
+    check_finite: bool = True,
+) -> torch.Tensor:
+    """Use a CPU initial frame without transferring any future reference field."""
+    if int(ddim_steps) != DDIM_STEPS:
+        raise ValueError("formal joint64 evaluation requires exactly 20 DDIM steps")
+    if physical_initial.ndim != 4 or tuple(physical_initial.shape[:2]) != (1, 1):
+        raise ValueError("physical_initial must have shape [1,1,N,3]")
+    expected_shape = (1, SEQUENCE_LENGTH, physical_initial.shape[2], 3)
+    if physical_initial.shape[-1] != 3 or tuple(position.shape) != expected_shape:
+        raise ValueError(
+            "initial frame and 65-frame coordinates have incompatible axes"
+        )
     device = model.device
-    sequence = physical_sequence.to(device=device, dtype=torch.float32)
+    initial = physical_initial.to(device=device, dtype=torch.float32)
     coordinates = position.to(device=device, dtype=torch.float32)
-    conditioning = build_conditioning_input(model, sequence, coordinates)
+    conditioning = model.get_learned_conditioning(
+        (model.normalizer.normalize(initial), coordinates[:, :1, :, :2], None)
+    )
     latent_shape = (
         1,
         model.channels,
@@ -102,12 +129,11 @@ def sample_joint64(
         verbose=False,
     )
     decoded = model.decode_first_stage(latent, coordinates)
-    expected_shape = tuple(sequence.shape)
     if tuple(decoded.shape) != expected_shape:
         raise ValueError(
             f"joint64 decoder returned {tuple(decoded.shape)}, expected {expected_shape}"
         )
-    prediction = torch.cat((sequence[:, :1], decoded[:, 1:]), dim=1)
-    if not torch.isfinite(prediction).all():
+    prediction = torch.cat((initial, decoded[:, 1:]), dim=1)
+    if check_finite and not torch.isfinite(prediction).all():
         raise FloatingPointError("joint64 prediction is non-finite")
     return prediction
