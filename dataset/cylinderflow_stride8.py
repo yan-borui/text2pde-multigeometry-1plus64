@@ -10,7 +10,6 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-
 DATA_FORMAT = "dgn4cfd.mgn_cylinderflow_temporal_stride.v1"
 STORED_FRAME_COUNT = 75
 RAW_FRAME_COUNT = 600
@@ -77,12 +76,7 @@ def write_text2pde_normalizer(
 
 
 class CylinderFlowStride8TrajectoryDataset(Dataset):
-    """One fixed phase-zero ``1 + 64`` prefix from each 75-frame trajectory.
-
-    The HDF5 asset retains all 75 phase-zero stride-8 frames. This dataset has no
-    temporal-window axis: sample ``i`` is exactly raw frames ``0, 8, ..., 512``
-    from one trajectory in the requested trajectory-level split.
-    """
+    """One fixed phase-zero sample: 75 frames for AE, first 65 for LDM."""
 
     def __init__(
         self,
@@ -91,8 +85,9 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
         split: str = "train",
         return_metadata: bool = False,
         sequence_start: int = SEQUENCE_START,
-        sequence_length: int = SEQUENCE_LENGTH,
+        sequence_length: int | None = None,
         strict_formal_counts: bool = True,
+        stage: str = "ldm",
     ) -> None:
         super().__init__()
         self.manifest_path = Path(manifest_path).resolve()
@@ -100,15 +95,22 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
         self.split = str(split).lower()
         self.return_metadata = bool(return_metadata)
         self.sequence_start = int(sequence_start)
-        self.sequence_length = int(sequence_length)
+        self.stage = str(stage).lower()
+        if self.stage not in ("ae", "ldm"):
+            raise ValueError("stride-8 stage must be ae or ldm")
+        expected_length = STORED_FRAME_COUNT if self.stage == "ae" else SEQUENCE_LENGTH
+        self.sequence_length = (
+            expected_length if sequence_length is None else int(sequence_length)
+        )
         self.strict_formal_counts = bool(strict_formal_counts)
 
         if self.split not in FORMAL_SPLIT_COUNTS:
             raise ValueError("stride-8 workflow exposes Train and Validation only")
         if self.sequence_start != SEQUENCE_START:
             raise ValueError("stride-8 workflow requires the unique phase-zero prefix")
-        if self.sequence_length != SEQUENCE_LENGTH:
-            raise ValueError("stride-8 workflow requires exactly 1 + 64 frames")
+        if self.sequence_length != expected_length:
+            required = "75 AE frames" if self.stage == "ae" else "exactly 1 + 64 frames"
+            raise ValueError(f"stride-8 {self.stage} requires {required}")
 
         self._validate_manifest()
         manifest_data_path = self.manifest.get("dataset")
@@ -344,8 +346,8 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
             raise ValueError(f"group {group_name} has the wrong phase offset")
 
         node_count = int(record["nodes"])
-        field_array = np.asarray(group["uvp"][:SEQUENCE_LENGTH], dtype=np.float32)
-        expected_shape = (SEQUENCE_LENGTH, node_count, 3)
+        field_array = np.asarray(group["uvp"][: self.sequence_length], dtype=np.float32)
+        expected_shape = (self.sequence_length, node_count, 3)
         if field_array.shape != expected_shape:
             raise ValueError(
                 f"trajectory {global_index} prefix has shape {field_array.shape}, "
@@ -358,14 +360,16 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
         normalized_mesh_pos, mesh_pos, cells, node_type = self._load_geometry(
             global_index, group
         )
-        spatial = normalized_mesh_pos.unsqueeze(0).expand(SEQUENCE_LENGTH, -1, -1)
-        local_time = torch.linspace(0.0, 1.0, SEQUENCE_LENGTH, dtype=torch.float32)
+        spatial = normalized_mesh_pos.unsqueeze(0).expand(self.sequence_length, -1, -1)
+        local_time = torch.linspace(0.0, 1.0, self.sequence_length, dtype=torch.float32)
         time_channel = local_time[:, None, None].expand(-1, node_count, 1)
         pos = torch.cat((spatial, time_channel), dim=-1)
         result: dict[str, Any] = {"x": field, "pos": pos}
 
         if eval or self.return_metadata:
-            frame_indices = torch.from_numpy(USED_SOURCE_FRAME_INDICES.copy())
+            frame_indices = torch.from_numpy(
+                EXPECTED_SOURCE_FRAME_INDICES[: self.sequence_length].copy()
+            )
             physical_time = frame_indices.to(torch.float64) * RAW_FRAME_DT
             result.update(
                 {
@@ -384,10 +388,11 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
                         "source_local_index": int(record["source_local_index"]),
                         "group": group_name,
                         "sequence_start": SEQUENCE_START,
-                        "sequence_length": SEQUENCE_LENGTH,
+                        "sequence_length": self.sequence_length,
+                        "stage": self.stage,
                         "stored_frame_count": STORED_FRAME_COUNT,
-                        "raw_frame_start": int(USED_SOURCE_FRAME_INDICES[0]),
-                        "raw_frame_stop_inclusive": int(USED_SOURCE_FRAME_INDICES[-1]),
+                        "raw_frame_start": int(frame_indices[0]),
+                        "raw_frame_stop_inclusive": int(frame_indices[-1]),
                         "temporal_stride": TEMPORAL_STRIDE,
                         "raw_frame_dt": RAW_FRAME_DT,
                         "frame_dt": FRAME_DT,

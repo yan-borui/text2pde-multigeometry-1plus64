@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import uuid
 from pathlib import Path
 from typing import Any, Iterator, Sized
 
@@ -8,7 +9,6 @@ import lightning as L
 import numpy as np
 import torch
 from torch.utils.data import Sampler
-
 
 RESUME_SCHEMA = "text2pde.cylinderflow.resume.v1"
 RESUME_KEY = "cylinderflow_resume_state"
@@ -141,9 +141,16 @@ def infer_batch_size(batch: Any) -> int:
 class ExactResumeCallback(L.Callback):
     """Persist the sample cursor and restore RNG after loader setup on resume."""
 
-    def __init__(self, start_examples_seen: int = 0) -> None:
+    def __init__(
+        self,
+        start_examples_seen: int = 0,
+        data_contract: dict[str, Any] | None = None,
+        dependencies: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__()
         self.examples_seen = int(start_examples_seen)
+        self.data_contract = data_contract
+        self.dependencies = dependencies
         self._pending_rng_state: dict[str, Any] | None = None
         self._rng_restored = False
 
@@ -183,6 +190,9 @@ class ExactResumeCallback(L.Callback):
             epoch_loop_state["_batches_that_stepped"] = int(trainer.global_step)
         checkpoint[RESUME_KEY] = {
             "schema": RESUME_SCHEMA,
+            "checkpoint_id": str(uuid.uuid4()),
+            "data_contract": self.data_contract,
+            "dependencies": self.dependencies,
             "examples_seen": self.examples_seen,
             "global_step": int(trainer.global_step),
             "current_epoch": int(trainer.current_epoch),
@@ -199,6 +209,18 @@ class ExactResumeCallback(L.Callback):
         record = checkpoint.get(RESUME_KEY)
         if not isinstance(record, dict) or record.get("schema") != RESUME_SCHEMA:
             raise ValueError("checkpoint cannot provide exact CylinderFlow resume")
+        if (
+            self.data_contract is not None
+            and record.get("data_contract") != self.data_contract
+        ):
+            raise ValueError(
+                "checkpoint data contract differs from the requested training stage"
+            )
+        if (
+            self.dependencies is not None
+            and record.get("dependencies") != self.dependencies
+        ):
+            raise ValueError("checkpoint dependencies differ from the selected AE")
         checkpoint_examples_seen = int(record["examples_seen"])
         if checkpoint_examples_seen != self.examples_seen:
             raise ValueError(

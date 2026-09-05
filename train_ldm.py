@@ -38,6 +38,27 @@ def main(args):
     if args.checkpoint is not None:
         trainconfig["checkpoint"] = args.checkpoint
 
+    data_contract = None
+    checkpoint_dependencies = None
+    if dataconfig["mode"] == "cylinderflow_stride8":
+        from tools.cylinderflow_stride8.protocol import (
+            checkpoint_identifier,
+            stage_data_contract,
+            validate_checkpoint_contract,
+            validate_locked_config,
+        )
+
+        validate_locked_config(config, "ldm")
+        data_contract = stage_data_contract("ldm")
+        first_stage_checkpoint = torch.load(
+            modelconfig["first_stage_config"]["pretrained_path"], map_location="cpu"
+        )
+        validate_checkpoint_contract(first_stage_checkpoint, "ae")
+        checkpoint_dependencies = {
+            "ae_checkpoint_id": checkpoint_identifier(first_stage_checkpoint)
+        }
+        del first_stage_checkpoint
+
     seed = trainconfig["seed"]
     start_examples_seen = 0
     exact_resume_modes = ("cylinderflow_windows", "cylinderflow_stride8")
@@ -79,7 +100,13 @@ def main(args):
     milestone_steps = trainconfig.get("milestone_every_n_steps")
     callbacks = []
     if dataconfig["mode"] in exact_resume_modes:
-        callbacks.append(ExactResumeCallback(start_examples_seen))
+        callbacks.append(
+            ExactResumeCallback(
+                start_examples_seen,
+                data_contract=data_contract,
+                dependencies=checkpoint_dependencies,
+            )
+        )
     callbacks.extend(
         [
             ModelCheckpoint(

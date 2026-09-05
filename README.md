@@ -6,8 +6,8 @@ The `feature/cylinderflow-stride8-1plus64` workflow retrains the established
 Text2PDE DiTSmall-FF model on
 [`DingDong1921/mgn-cylinderflow-stride8-75frames`](https://huggingface.co/datasets/DingDong1921/mgn-cylinderflow-stride8-75frames).
 The release preserves 75 phase-zero frames per trajectory. The loader produces
-exactly one sample per trajectory from the first 65 frames: raw indices
-`0,8,...,512`, shape `[65,N,3]`, and physical `dt=0.08`. There are 1,000 Train
+one sample per trajectory: AE reads all 75 frames (`0,8,...,592`), while
+LDM reads only the first 65 frames (`0,8,...,512`). Physical `dt=0.08` is unchanged. There are 1,000 Train
 samples and 100 Validation samples. No sliding-window start or alternate temporal
 phase exists in this workflow.
 
@@ -56,8 +56,12 @@ to the conditioner, decoder frame 0 is discarded, and decoded frames 1 through
 64 form the forecast. The evaluator performs no three-segment autoregressive
 stitching. It reports UV, raw and gauge-free pressure, vorticity, divergence,
 energy/enstrophy, temporal spectrum, phase/correlation, boundary errors, failures,
-and inference cost; it saves all seed-0 arrays with raw frame/time identity and
-shared-scale favorable/median/difficult/worst GIFs.
+and inference cost; it saves every sampling seed, including failures, using the common physical
+prediction schema. It applies inlet/wall velocity writeback, aggregates within
+trajectory before population statistics, and ranks candidates by failure count,
+UV error, then earlier update. See [the staged data/evaluation contract](DATA_CONTRACT.md)
+and [verification](ALIGNMENT_VERIFICATION.json). Shared-scale seed-0
+favorable/median/difficult/worst GIFs remain available.
 
 This workflow exposes only `select` and `validation` evaluator modes. It has no
 Test entry. The pre-existing raw-grid Test launcher remains confined to the

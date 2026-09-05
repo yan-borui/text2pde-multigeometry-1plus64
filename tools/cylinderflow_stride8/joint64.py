@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import random
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
 
-from modules.models.ddpm import LatentDiffusion
-from modules.modules.ddim import DDIMSampler
+if TYPE_CHECKING:
+    from modules.models.ddpm import LatentDiffusion
+    from modules.modules.ddim import DDIMSampler
 
 
 SEQUENCE_LENGTH = 65

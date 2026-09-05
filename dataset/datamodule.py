@@ -90,6 +90,9 @@ class FluidsDataModule(L.LightningDataModule):
                 "strict_formal_counts": dataset_config.get(
                     "strict_formal_counts", True
                 ),
+                "stage": dataset_config.get("stage", "ldm"),
+                "sequence_start": dataset_config.get("sequence_start", 0),
+                "sequence_length": dataset_config.get("sequence_length"),
             }
             self.train_dataset = CylinderFlowStride8TrajectoryDataset(
                 split="train", **shared

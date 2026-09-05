@@ -15,6 +15,9 @@ from modules.models.ae.ae_mesh import AutoencoderKL
 from modules.utils import get_yaml
 from tools.cylinderflow_stride8.protocol import (
     AE_MILESTONES,
+    checkpoint_identifier,
+    stage_data_contract,
+    validate_checkpoint_contract,
     validate_locked_config,
     validation_monitor_indices,
 )
@@ -24,6 +27,7 @@ def checkpoint_identity(file_path: Path) -> tuple[int, dict[str, Any]]:
     checkpoint = torch.load(file_path, map_location="cpu")
     if "state_dict" not in checkpoint:
         raise KeyError(f"checkpoint has no state_dict: {file_path}")
+    validate_checkpoint_contract(checkpoint, "ae")
     return int(checkpoint.get("global_step", -1)), checkpoint
 
 
@@ -95,7 +99,9 @@ def evaluate_checkpoint(
         )
     result = {
         "checkpoint": str(file_path.resolve()),
+        "checkpoint_id": checkpoint_identifier(checkpoint),
         "global_step": global_step,
+        "data_contract": stage_data_contract("ae"),
         "validation_indices": list(indices),
         "trajectory_count": len(indices),
         "mean_normalized_uvp_l1": sum(normalized_l1) / len(normalized_l1),
@@ -161,11 +167,12 @@ def main() -> None:
         key=lambda row: (row["mean_normalized_uvp_l1"], row["global_step"]),
     )
     summary = {
-        "schema": "text2pde.cylinderflow_stride8.ae_selection.v1",
+        "schema": "text2pde.cylinderflow_stride8.ae_selection.v2",
+        "data_contract": stage_data_contract("ae"),
         "selection_metric": "mean_normalized_uvp_l1",
         "monitor_rule": "24 uniformly covering Validation trajectory indices",
         "monitor_indices": list(indices),
-        "sequence_raw_indices": "0:520:8",
+        "sequence_raw_indices": "0:600:8",
         "test_accessed": False,
         "candidates": results,
         "selected": selected,

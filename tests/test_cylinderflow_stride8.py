@@ -14,7 +14,6 @@ from dataset.cylinderflow_stride8 import (
     write_text2pde_normalizer,
 )
 
-
 MEANS = [0.5, -0.25, 1.5]
 STDS = [2.0, 3.0, 4.0]
 
@@ -126,6 +125,44 @@ def write_fixture(root: Path) -> tuple[Path, Path]:
 
 
 class CylinderFlowStride8Test(unittest.TestCase):
+    def test_ae_uses_75_frames_while_ldm_stays_at_the_first_65(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            data_file, manifest_file = write_fixture(Path(temporary_directory))
+            ae = CylinderFlowStride8TrajectoryDataset(
+                manifest_file,
+                data_file,
+                stage="ae",
+                return_metadata=True,
+                strict_formal_counts=False,
+            )
+            ldm = CylinderFlowStride8TrajectoryDataset(
+                manifest_file,
+                data_file,
+                stage="ldm",
+                return_metadata=True,
+                strict_formal_counts=False,
+            )
+            ae_sample, ldm_sample = ae[0], ldm[0]
+            self.assertEqual(tuple(ae_sample["x"].shape), (75, 4, 3))
+            self.assertEqual(tuple(ae_sample["pos"].shape), (75, 4, 3))
+            self.assertEqual(tuple(ldm_sample["x"].shape), (65, 4, 3))
+            self.assertEqual(int(ae_sample["frame_indices"][-1]), 592)
+            self.assertEqual(ae_sample["metadata"]["raw_frame_stop_inclusive"], 592)
+            self.assertEqual(ldm_sample["metadata"]["raw_frame_stop_inclusive"], 512)
+            self.assertAlmostEqual(float(ae_sample["time"][-1]), 5.92)
+            self.assertEqual(float(ae_sample["pos"][-1, 0, 2]), 1.0)
+            self.assertEqual(float(ldm_sample["pos"][-1, 0, 2]), 1.0)
+            np.testing.assert_array_equal(ae_sample["x"][:65], ldm_sample["x"])
+            ae.close()
+            ldm.close()
+            with h5py.File(data_file, "r+") as handle:
+                handle["trajectory_0000/uvp"][65:] = np.nan
+            np.testing.assert_array_equal(ldm[0]["x"], ldm_sample["x"])
+            with self.assertRaisesRegex(ValueError, "non-finite"):
+                _ = ae[0]
+            ae.close()
+            ldm.close()
+
     def test_unique_prefix_shape_identity_and_time(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             data_path, manifest_path = write_fixture(Path(temporary_directory))

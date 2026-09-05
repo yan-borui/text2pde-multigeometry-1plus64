@@ -4,24 +4,32 @@ import argparse
 import copy
 import json
 import math
+import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
 
 from dataset.cylinderflow_stride8 import CylinderFlowStride8TrajectoryDataset
-from dataset.datamodule import FluidsDataModule
-from modules.models.ddpm import LatentDiffusion
-from modules.modules.ddim import DDIMSampler
+
+if TYPE_CHECKING:
+    from dataset.datamodule import FluidsDataModule
+    from modules.models.ddpm import LatentDiffusion
 from modules.utils import get_yaml
-from tools.cylinderflow.metrics import (
-    aggregate_rows,
+from tools.cylinderflow_stride8.metrics import (
     compute_metrics,
-    render_comparison_gif,
-    shared_visual_scales,
+    selection_key,
+    summarize_trajectories,
 )
+from tools.cylinderflow_stride8.predictions import (
+    boundary_metrics,
+    save_prediction,
+    writeback_velocity,
+)
+from tools.cylinderflow_stride8.evaluation_io import append_json, write_csv, write_json
+
 from tools.cylinderflow_stride8.joint64 import (
     derive_sample_seed,
     sample_joint64,
@@ -31,21 +39,26 @@ from tools.cylinderflow_stride8.protocol import (
     DDIM_STEPS,
     LDM_MILESTONES,
     SAMPLING_SEEDS,
+    checkpoint_identifier,
+    stage_data_contract,
+    validate_ae_dependency,
+    validate_checkpoint_contract,
     validate_locked_config,
     validation_monitor_indices,
 )
 
 
-def write_json(file_path: Path, value: Any) -> None:
-    with file_path.open("w", encoding="utf-8") as handle:
-        json.dump(value, handle, indent=2, sort_keys=True)
-        handle.write("\n")
+def make_sampler(model):
+    from modules.modules.ddim import DDIMSampler
+
+    return DDIMSampler(model=model)
 
 
 def checkpoint_identity(file_path: Path) -> tuple[int, dict[str, Any]]:
     checkpoint = torch.load(file_path, map_location="cpu")
     if "state_dict" not in checkpoint:
         raise KeyError(f"checkpoint has no state_dict: {file_path}")
+    validate_checkpoint_contract(checkpoint, "ldm")
     return int(checkpoint.get("global_step", -1)), checkpoint
 
 
@@ -56,6 +69,12 @@ def instantiate_model(
     datamodule: FluidsDataModule,
     device: torch.device,
 ) -> tuple[LatentDiffusion, int]:
+    from modules.models.ddpm import LatentDiffusion
+
+    ae_state = torch.load(ae_checkpoint, map_location="cpu")
+    global_step, checkpoint = checkpoint_identity(checkpoint_path)
+    dependencies = validate_ae_dependency(checkpoint, ae_state)
+    del ae_state
     model_config = copy.deepcopy(config["model"])
     model_config["first_stage_config"]["pretrained_path"] = str(ae_checkpoint.resolve())
     model = LatentDiffusion(
@@ -63,41 +82,15 @@ def instantiate_model(
         normalizer=datamodule.normalizer,
         use_embed=False,
     )
-    global_step, checkpoint = checkpoint_identity(checkpoint_path)
     model.load_state_dict(checkpoint["state_dict"], strict=True)
+    model._stride8_dependencies = dependencies
+    model._stride8_checkpoint_id = checkpoint_identifier(checkpoint)
     model.eval().to(device)
     return model, global_step
 
 
-def sample_file_name(sample_index: int, trajectory_index: int) -> str:
-    return f"sample_{sample_index:03d}_trajectory_{trajectory_index:04d}.npz"
-
-
-def save_seed_zero_sample(
-    file_path: Path,
-    sample: dict[str, Any],
-    prediction: np.ndarray,
-    evaluation_seed: int,
-    sampler_seed: int,
-) -> None:
-    np.savez_compressed(
-        file_path,
-        target=sample["x"].numpy().astype(np.float32, copy=False),
-        prediction=prediction.astype(np.float32, copy=False),
-        points=sample["mesh_pos"].numpy().astype(np.float32, copy=False),
-        cells=sample["cells"].numpy().astype(np.int64, copy=False),
-        node_type=sample["node_type"].numpy().astype(np.int64, copy=False),
-        frame_indices=sample["frame_indices"].numpy().astype(np.int64, copy=False),
-        physical_time=sample["time"].numpy().astype(np.float64, copy=False),
-        evaluation_seed=np.asarray(evaluation_seed, dtype=np.int64),
-        sampler_seed=np.asarray(sampler_seed, dtype=np.int64),
-        trajectory_index=np.asarray(
-            sample["metadata"]["trajectory_index"], dtype=np.int64
-        ),
-        sequence_rule=np.asarray(
-            "one DDIM call; clean frame 0 + predicted frames 1:65"
-        ),
-    )
+def sample_file_name(trajectory_index: int, evaluation_seed: int) -> str:
+    return f"trajectory_{trajectory_index:04d}_seed_{evaluation_seed}.npz"
 
 
 def evaluate_one_checkpoint(
@@ -114,11 +107,33 @@ def evaluate_one_checkpoint(
     model, global_step = instantiate_model(
         config, checkpoint_path, ae_checkpoint, datamodule, device
     )
-    sampler = DDIMSampler(model=model)
+    sampler = make_sampler(model)
     rows: list[dict[str, Any]] = []
     started = time.perf_counter()
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
+
+    repository = Path(__file__).resolve().parents[2]
+    code_result = subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    provenance = {
+        "training_seed": int(config["training"]["seed"]),
+        "checkpoint": str(checkpoint_path.resolve()),
+        "checkpoint_update": global_step,
+        "checkpoint_id": getattr(model, "_stride8_checkpoint_id", None),
+        "dependencies": getattr(model, "_stride8_dependencies", {}),
+        "ae_checkpoint": str(ae_checkpoint.resolve()),
+        "normalizer_values": list(dataset.normalizer_values),
+        "data_contract": stage_data_contract("ldm"),
+        "ae_data_contract": stage_data_contract("ae"),
+        "configuration": config,
+        "evaluation_code_commit": code_result.stdout.strip(),
+    }
+    if sample_dir is not None:
+        sample_dir.mkdir(parents=True, exist_ok=False)
 
     for evaluation_seed in seeds:
         for sample_index in indices:
@@ -127,10 +142,15 @@ def evaluate_one_checkpoint(
             trajectory_index = int(metadata["trajectory_index"])
             sampler_seed = derive_sample_seed(evaluation_seed, trajectory_index)
             set_sample_seed(sampler_seed)
-            target_tensor = sample["x"].unsqueeze(0).to(device)
-            position_tensor = sample["pos"].unsqueeze(0).to(device)
+            target = sample["x"].numpy()
+            prediction = np.full_like(target, np.nan)
+            prediction[0] = target[0]
+            pre_boundary = prediction.copy()
+            failure = None
             sample_started = time.perf_counter()
             try:
+                target_tensor = sample["x"].unsqueeze(0).to(device)
+                position_tensor = sample["pos"].unsqueeze(0).to(device)
                 prediction_tensor = sample_joint64(
                     model,
                     sampler,
@@ -138,55 +158,71 @@ def evaluate_one_checkpoint(
                     position_tensor,
                     ddim_steps=DDIM_STEPS,
                 )
-                if device.type == "cuda":
-                    torch.cuda.synchronize(device)
-                inference_seconds = time.perf_counter() - sample_started
-                prediction = prediction_tensor[0].float().cpu().numpy()
-                metrics = compute_metrics(
-                    prediction,
-                    sample["x"].numpy(),
-                    sample["mesh_pos"].numpy(),
-                    sample["cells"].numpy(),
-                    sample["node_type"].numpy(),
-                    dt=0.08,
-                    include_segment_seams=False,
+                pre_boundary = prediction_tensor[0].float().cpu().numpy()
+                prediction = writeback_velocity(
+                    pre_boundary, target[0], sample["node_type"].numpy()
                 )
-                row = {
-                    **metadata,
-                    **metrics,
-                    "sample_index": sample_index,
-                    "evaluation_seed": evaluation_seed,
-                    "sampler_seed": sampler_seed,
-                    "global_step": global_step,
-                    "ddim_steps": DDIM_STEPS,
-                    "inference_seconds": inference_seconds,
-                }
-                rows.append(row)
-                if sample_dir is not None and evaluation_seed == seeds[0]:
-                    sample_dir.mkdir(parents=True, exist_ok=True)
-                    save_seed_zero_sample(
-                        sample_dir / sample_file_name(sample_index, trajectory_index),
-                        sample,
-                        prediction,
-                        evaluation_seed,
-                        sampler_seed,
-                    )
-            except FloatingPointError as error:
+            except (FloatingPointError, torch.cuda.OutOfMemoryError) as error:
+                failure = f"{type(error).__name__}: {error}"
                 if device.type == "cuda":
-                    torch.cuda.synchronize(device)
-                rows.append(
-                    {
-                        **metadata,
-                        "sample_index": sample_index,
-                        "evaluation_seed": evaluation_seed,
+                    torch.cuda.empty_cache()
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            inference_seconds = time.perf_counter() - sample_started
+            metrics = compute_metrics(
+                prediction,
+                target,
+                sample["mesh_pos"].numpy(),
+                sample["cells"].numpy(),
+                sample["node_type"].numpy(),
+                dt=0.08,
+            )
+            metrics.update(
+                boundary_metrics(
+                    prediction, pre_boundary, target[0], sample["node_type"].numpy()
+                )
+            )
+            primary = metrics.get("uv_relative_rmse")
+            metrics["finite"] = bool(
+                metrics.get("finite") and primary is not None and np.isfinite(primary)
+            )
+            row = {
+                **metadata,
+                **metrics,
+                "sample_index": sample_index,
+                "seed": evaluation_seed,
+                "evaluation_seed": evaluation_seed,
+                "sampler_seed": sampler_seed,
+                "global_step": global_step,
+                "ddim_steps": DDIM_STEPS,
+                "inference_seconds": inference_seconds,
+            }
+            if not row["finite"]:
+                row["failure"] = failure or "nonfinite prediction or primary metric"
+            if sample_dir is not None:
+                file_path = sample_dir / sample_file_name(
+                    trajectory_index, evaluation_seed
+                )
+                save_prediction(
+                    file_path,
+                    prediction=prediction,
+                    pre_boundary=pre_boundary,
+                    target=target,
+                    points=sample["mesh_pos"].numpy(),
+                    cells=sample["cells"].numpy(),
+                    node_type=sample["node_type"].numpy(),
+                    trajectory_index=trajectory_index,
+                    seed=evaluation_seed,
+                    provenance={
+                        **provenance,
                         "sampler_seed": sampler_seed,
-                        "global_step": global_step,
-                        "ddim_steps": DDIM_STEPS,
-                        "inference_seconds": time.perf_counter() - sample_started,
-                        "finite": False,
-                        "failure": str(error),
-                    }
+                        "failure": row.get("failure"),
+                        "prediction_is_placeholder": failure is not None,
+                    },
                 )
+                row["prediction_file"] = str(file_path.resolve())
+                append_json(sample_dir.parent / "case_metrics.jsonl", row)
+            rows.append(row)
 
     if device.type == "cuda":
         torch.cuda.synchronize(device)
@@ -199,10 +235,13 @@ def evaluate_one_checkpoint(
         "global_step": global_step,
         "ddim_steps": DDIM_STEPS,
         "autoregressive_segments": 0,
+        "checkpoint_id": getattr(model, "_stride8_checkpoint_id", None),
+        "dependencies": getattr(model, "_stride8_dependencies", {}),
+        "data_contract": stage_data_contract("ldm"),
         "sampling_protocol": "one joint 1 clean + 64 future DDIM call",
         "evaluation_seeds": list(seeds),
         "validation_indices": list(indices),
-        "aggregate": aggregate_rows(rows),
+        "aggregate": summarize_trajectories(rows),
         "finite_sequences": finite_count,
         "total_sequences": len(rows),
         "elapsed_seconds": elapsed_seconds,
@@ -222,6 +261,17 @@ def evaluate_one_checkpoint(
             int(torch.cuda.max_memory_reserved(device)) if device.type == "cuda" else 0
         ),
     }
+    if sample_dir is not None:
+        write_csv(sample_dir.parent / "case_metrics.csv", rows)
+        write_csv(
+            sample_dir.parent / "trajectory_metrics.csv",
+            result["aggregate"]["trajectory_metrics"],
+        )
+        write_json(sample_dir.parent / "summary.json", result)
+        write_json(
+            sample_dir.parent / "failures.json",
+            {"failures": [row for row in rows if not row["finite"]]},
+        )
     del sampler, model
     if device.type == "cuda":
         torch.cuda.empty_cache()
@@ -232,6 +282,8 @@ def render_representatives(
     output_dir: Path,
     rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    from tools.cylinderflow.metrics import render_comparison_gif, shared_visual_scales
+
     finite_seed_zero = sorted(
         (
             row
@@ -243,7 +295,9 @@ def render_representatives(
         key=lambda row: float(row["uv_relative_rmse"]),
     )
     if not finite_seed_zero:
-        raise RuntimeError("no finite seed-0 Validation samples can be rendered")
+        result = {"status": "no finite seed-0 samples", "selections": {}}
+        write_json(output_dir / "representative_samples.json", result)
+        return result
     positions = {
         "favorable": 0,
         "median": len(finite_seed_zero) // 2,
@@ -253,14 +307,11 @@ def render_representatives(
         ),
         "worst": len(finite_seed_zero) - 1,
     }
-    sample_dir = output_dir / "samples_seed0"
     selections: dict[str, Any] = {}
     paths = []
     for label, position in positions.items():
         row = finite_seed_zero[position]
-        file_path = sample_dir / sample_file_name(
-            int(row["sample_index"]), int(row["trajectory_index"])
-        )
+        file_path = Path(row["prediction_file"])
         if not file_path.is_file():
             raise FileNotFoundError(file_path)
         paths.append(file_path)
@@ -321,6 +372,8 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=False)
     config = get_yaml(args.config)
     validate_locked_config(config, "ldm")
+    from dataset.datamodule import FluidsDataModule
+
     datamodule = FluidsDataModule(config["data"])
     dataset = datamodule.val_dataset
     if not isinstance(dataset, CylinderFlowStride8TrajectoryDataset):
@@ -333,10 +386,8 @@ def main() -> None:
 
     candidate_results = []
     rows_by_checkpoint: dict[str, list[dict[str, Any]]] = {}
-    for checkpoint in checkpoints:
-        sample_dir = (
-            args.output_dir / "samples_seed0" if args.mode == "validation" else None
-        )
+    for number, checkpoint in enumerate(checkpoints):
+        sample_dir = args.output_dir / f"candidate_{number:03d}" / "predictions"
         result, rows = evaluate_one_checkpoint(
             checkpoint,
             args.ae_checkpoint,
@@ -357,17 +408,13 @@ def main() -> None:
         rows_by_checkpoint[str(checkpoint.resolve())] = rows
 
     if args.mode == "select":
-        for result in candidate_results:
-            value = result["aggregate"].get("uv_relative_rmse", {}).get("mean")
-            if value is None or not math.isfinite(float(value)):
-                raise FloatingPointError("candidate has no finite UV selection metric")
         selected = min(
             candidate_results,
-            key=lambda record: (
-                record["aggregate"]["uv_relative_rmse"]["mean"],
-                record["global_step"],
+            key=lambda record: selection_key(
+                record["aggregate"], record["global_step"]
             ),
         )
+
         (args.output_dir / "selected_checkpoint.txt").write_text(
             selected["checkpoint"] + "\n", encoding="utf-8"
         )
@@ -379,9 +426,11 @@ def main() -> None:
             )
 
     summary = {
-        "schema": "text2pde.cylinderflow_stride8.joint64_evaluation.v1",
+        "schema": "text2pde.cylinderflow_stride8.joint64_evaluation.v2",
+        "data_contract": stage_data_contract("ldm"),
+        "evaluator": "cylinderflow.physical_mesh.v1",
         "mode": args.mode,
-        "selection_metric": "mean trajectory-seed area-weighted UV relative RMSE",
+        "selection_metric": "failed clips, then mean trajectory UV relative RMSE, then earlier update",
         "physical_dt": 0.08,
         "sequence_raw_indices": "0:520:8",
         "condition": "clean frame 0 only",

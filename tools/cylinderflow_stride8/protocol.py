@@ -5,13 +5,13 @@ from typing import Any
 
 import numpy as np
 
-
 AE_MILESTONES = (62_500, 125_000, 187_500, 250_000)
 LDM_MILESTONES = AE_MILESTONES
 SAMPLING_SEEDS = (0, 1, 2)
 DDIM_STEPS = 20
 VALIDATION_TRAJECTORY_COUNT = 100
 MONITOR_TRAJECTORY_COUNT = 24
+STAGE_PROTOCOL = "text2pde.cylinderflow_stride8.ae75.joint65.v2"
 
 
 def validation_monitor_indices(
@@ -33,6 +33,15 @@ def validate_locked_config(config: dict[str, Any], stage: str) -> None:
         raise ValueError(f"unsupported training stage: {stage}")
     data = config["data"]
     training = config["training"]
+    expected_length = 75 if stage == "ae" else 65
+    expected_dataset = {
+        "stage": stage,
+        "sequence_start": 0,
+        "sequence_length": expected_length,
+    }
+    for name, expected in expected_dataset.items():
+        if data["dataset"].get(name) != expected:
+            raise ValueError(f"data.dataset.{name} must be {expected!r} for {stage}")
     expected_data = {
         "mode": "cylinderflow_stride8",
         "batch_size": 1,
@@ -91,3 +100,42 @@ def require_existing_file(value: str | Path | None, label: str) -> Path:
     if not path.is_file():
         raise FileNotFoundError(f"{label} is missing: {path}")
     return path
+
+
+def stage_data_contract(stage: str) -> dict[str, Any]:
+    """Identity saved with checkpoints to reject cross-stage or old AE resumes."""
+    if stage not in ("ae", "ldm"):
+        raise ValueError(f"unsupported training stage: {stage}")
+    return {
+        "protocol": STAGE_PROTOCOL,
+        "stage": stage,
+        "sequence_start": 0,
+        "sequence_length": 75 if stage == "ae" else 65,
+        "temporal_stride": 8,
+        "normalization_frames": 75,
+        "time_coordinates": "sequence-relative [0,1]",
+    }
+
+
+def validate_checkpoint_contract(checkpoint: dict[str, Any], stage: str) -> None:
+    actual = checkpoint.get("cylinderflow_resume_state", {}).get("data_contract")
+    if actual != stage_data_contract(stage):
+        raise ValueError(f"checkpoint does not match the {stage} staged frame contract")
+
+
+def checkpoint_identifier(checkpoint: dict[str, Any]) -> str:
+    identifier = checkpoint.get("cylinderflow_resume_state", {}).get("checkpoint_id")
+    if not isinstance(identifier, str) or not identifier:
+        raise ValueError("checkpoint has no saved unique identity")
+    return identifier
+
+
+def validate_ae_dependency(
+    checkpoint: dict[str, Any], ae_checkpoint: dict[str, Any]
+) -> dict[str, str]:
+    validate_checkpoint_contract(checkpoint, "ldm")
+    validate_checkpoint_contract(ae_checkpoint, "ae")
+    expected = {"ae_checkpoint_id": checkpoint_identifier(ae_checkpoint)}
+    if checkpoint.get("cylinderflow_resume_state", {}).get("dependencies") != expected:
+        raise ValueError("LDM checkpoint dependencies differ from the selected AE")
+    return expected

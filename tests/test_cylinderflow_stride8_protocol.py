@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import copy
 from pathlib import Path
 
 from modules.utils import get_yaml
@@ -8,15 +9,67 @@ from tools.cylinderflow_stride8.materialize_config import materialize_config
 from tools.cylinderflow_stride8.protocol import (
     AE_MILESTONES,
     LDM_MILESTONES,
+    checkpoint_identifier,
     validate_locked_config,
+    stage_data_contract,
+    validate_checkpoint_contract,
+    validate_ae_dependency,
     validation_monitor_indices,
 )
-
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 class CylinderFlowStride8ProtocolTest(unittest.TestCase):
+    def test_ldm_rejects_a_different_ae_with_the_same_frame_contract(self) -> None:
+        ae = {
+            "cylinderflow_resume_state": {
+                "data_contract": stage_data_contract("ae"),
+                "checkpoint_id": "selected-ae",
+            }
+        }
+        ldm = {
+            "cylinderflow_resume_state": {
+                "data_contract": stage_data_contract("ldm"),
+                "checkpoint_id": "selected-ldm",
+                "dependencies": {"ae_checkpoint_id": "selected-ae"},
+            }
+        }
+        self.assertEqual(
+            validate_ae_dependency(ldm, ae), {"ae_checkpoint_id": "selected-ae"}
+        )
+        ae["cylinderflow_resume_state"]["checkpoint_id"] = "other-ae"
+        with self.assertRaisesRegex(ValueError, "dependencies"):
+            validate_ae_dependency(ldm, ae)
+        with self.assertRaisesRegex(ValueError, "unique identity"):
+            checkpoint_identifier({})
+
+    def test_stage_frames_and_checkpoint_identity_cannot_be_crossed(self) -> None:
+        for stage, frames in (("ae", 75), ("ldm", 65)):
+            config = get_yaml(
+                REPOSITORY_ROOT
+                / "configs"
+                / "cylinderflow_stride8"
+                / f"{stage}_1plus64.yaml"
+            )
+            self.assertEqual(config["data"]["dataset"]["sequence_length"], frames)
+            changed = copy.deepcopy(config)
+            changed["data"]["dataset"]["sequence_length"] = 140 - frames
+            with self.assertRaises(ValueError):
+                validate_locked_config(changed, stage)
+            checkpoint = {
+                "cylinderflow_resume_state": {
+                    "data_contract": stage_data_contract(stage)
+                }
+            }
+            validate_checkpoint_contract(checkpoint, stage)
+            with self.assertRaises(ValueError):
+                validate_checkpoint_contract({}, stage)
+            with self.assertRaises(ValueError):
+                validate_checkpoint_contract(
+                    checkpoint, "ldm" if stage == "ae" else "ae"
+                )
+
     def test_locked_configs_keep_joint64_architecture_and_training_budget(self) -> None:
         for stage in ("ae", "ldm"):
             config = get_yaml(

@@ -1,0 +1,89 @@
+{
+  "schema": "cylinderflow.staged_alignment_verification.v1",
+  "observed_at_utc": "2026-09-05T06:48:39Z",
+  "method": "text2pde",
+  "status": "PASS",
+  "source": {
+    "base_commit": "43e76c6396f47e8f1c5ceb363bd24471e919c9e9",
+    "change_identity": "The commit containing this record; reviewed working-tree sources verified in isolated Linux snapshots."
+  },
+  "protocol": "text2pde.cylinderflow_stride8.ae75.joint65.v2",
+  "evaluator": "cylinderflow.physical_mesh.v1",
+  "prediction_schema": "cylinderflow.physical_prediction.v2",
+  "training_frames": {
+    "ae": 75,
+    "ldm": 65
+  },
+  "evaluation": {
+    "observed_frames": 1,
+    "future_frames": 64,
+    "total_frames": 65,
+    "dt": 0.08,
+    "raw_final_frame": 512
+  },
+  "frozen_recipe_preserved": true,
+  "hyperparameter_search": false,
+  "environment": {
+    "platform": "Linux",
+    "device": "cpu",
+    "dependencies": "Existing repository environments; no dependency installation or upgrade."
+  },
+  "verification_snapshots": [
+    "cylinderflow_alignment_verify_20260905a",
+    "cylinderflow_alignment_verify_20260905b",
+    "cylinderflow_alignment_verify_20260905c"
+  ],
+  "checks": [
+    {
+      "command": "python -m compileall -q dataset tools/cylinderflow_stride8 modules/modules/reproducible_resume.py train_AE.py train_ldm.py",
+      "exit_code": 0
+    },
+    {
+      "command": "python -m unittest discover -s tests -p 'test_cylinderflow*.py' -v",
+      "tests": 34,
+      "skipped": 0,
+      "exit_code": 0,
+      "coverage": [
+        "AE75/LDM65 data and raw-time identities",
+        "FluidsDataModule stage wiring",
+        "first-frame-only joint64 information flow",
+        "exact Lightning resume across epoch boundaries",
+        "checkpoint stage and selected-AE dependency rejection",
+        "all sampling labels and numerical-failure archives",
+        "physical rescoring, trajectory aggregation and selection",
+        "Validation finalization identity guards"
+      ]
+    },
+    {
+      "check": "training_control",
+      "tests": 1,
+      "exit_code": 0
+    },
+    {
+      "check": "gino_chunking",
+      "tests": 2,
+      "exit_code": 0
+    },
+    {
+      "check": "Existing Text2PDE renderer reads a common 65-frame physical archive and produces a GIF",
+      "exit_code": 0
+    }
+  ],
+  "cross_repository_scoring": {
+    "inputs": "The same three AROMA synthetic rollout archives",
+    "clips": 3,
+    "trajectories": 1,
+    "physical_aggregates_exactly_equal": true,
+    "failure_counts_equal": true,
+    "excluded_fields": [
+      "metrics_seconds"
+    ],
+    "original_comparison_issue": "The first verification harness compared measured scoring duration as well as physical results. Inspection found only metrics_seconds differences. The final comparison excludes that timing field; earlier logs remain preserved."
+  },
+  "limits": {
+    "formal_training_started": false,
+    "test_accessed": false,
+    "target_gpu_acceptance": "pending",
+    "trained_model_quality": "requires new training and Validation under this staged protocol"
+  }
+}

@@ -9,7 +9,6 @@ import numpy as np
 
 from dataset.cylinderflow_stride8 import CylinderFlowStride8TrajectoryDataset
 
-
 EXPECTED_BYTES = 1_772_387_753
 EXPECTED_SHA256 = "d416be274e03a5d77f1cf2dffc4be8abcfc63ff9d6bf5a9cca19a44b43b36533"
 
@@ -36,44 +35,52 @@ def verify(
     if digest is not None and digest != EXPECTED_SHA256:
         raise ValueError(f"HDF5 SHA-256 {digest} != {EXPECTED_SHA256}")
 
-    train = CylinderFlowStride8TrajectoryDataset(
-        manifest_path, data_path, split="train", return_metadata=True
-    )
-    validation = CylinderFlowStride8TrajectoryDataset(
-        manifest_path, data_path, split="validation", return_metadata=True
-    )
     sample_records = []
-    for split_name, dataset, local_index in (
-        ("train", train, 0),
-        ("train", train, 999),
-        ("validation", validation, 0),
-        ("validation", validation, 99),
-    ):
-        sample = dataset[local_index]
-        if tuple(sample["x"].shape)[0::2] != (65, 3):
-            raise ValueError("loader did not return x:[65,N,3]")
-        if not np.isfinite(sample["x"].numpy()).all():
-            raise ValueError("loader returned non-finite UVP")
-        expected_frames = np.arange(0, 520, 8)
-        if not np.array_equal(sample["frame_indices"].numpy(), expected_frames):
-            raise ValueError("loader raw-frame mapping differs from 0:520:8")
-        if not np.allclose(
-            sample["time"].numpy(), expected_frames * 0.01, rtol=0, atol=1e-12
-        ):
-            raise ValueError("loader physical-time mapping is incorrect")
-        sample_records.append(
-            {
-                "split": split_name,
-                "local_index": local_index,
-                "global_index": sample["metadata"]["trajectory_index"],
-                "x_shape": list(sample["x"].shape),
-                "cells_shape": list(sample["cells"].shape),
-            }
+    for stage, length in (("ae", 75), ("ldm", 65)):
+        train = CylinderFlowStride8TrajectoryDataset(
+            manifest_path, data_path, split="train", stage=stage, return_metadata=True
         )
-    train.close()
-    validation.close()
+        validation = CylinderFlowStride8TrajectoryDataset(
+            manifest_path,
+            data_path,
+            split="validation",
+            stage=stage,
+            return_metadata=True,
+        )
+        try:
+            for split_name, dataset, local_index in (
+                ("train", train, 0),
+                ("train", train, 999),
+                ("validation", validation, 0),
+                ("validation", validation, 99),
+            ):
+                sample = dataset[local_index]
+                if tuple(sample["x"].shape)[0::2] != (length, 3):
+                    raise ValueError(f"{stage} loader did not return x:[{length},N,3]")
+                if not np.isfinite(sample["x"].numpy()).all():
+                    raise ValueError("loader returned non-finite UVP")
+                expected_frames = np.arange(length) * 8
+                if not np.array_equal(sample["frame_indices"].numpy(), expected_frames):
+                    raise ValueError(f"{stage} loader raw-frame mapping differs")
+                if not np.allclose(
+                    sample["time"].numpy(), expected_frames * 0.01, rtol=0, atol=1e-12
+                ):
+                    raise ValueError("loader physical-time mapping is incorrect")
+                sample_records.append(
+                    {
+                        "stage": stage,
+                        "split": split_name,
+                        "local_index": local_index,
+                        "global_index": sample["metadata"]["trajectory_index"],
+                        "x_shape": list(sample["x"].shape),
+                        "cells_shape": list(sample["cells"].shape),
+                    }
+                )
+        finally:
+            train.close()
+            validation.close()
     return {
-        "schema": "text2pde.cylinderflow_stride8.data_verification.v1",
+        "schema": "text2pde.cylinderflow_stride8.data_verification.v2",
         "status": "PASS",
         "data": str(data_path),
         "manifest": str(manifest_path),
@@ -84,8 +91,10 @@ def verify(
         "validation_trajectories": 100,
         "samples_per_trajectory": 1,
         "sequence_raw_indices": "0:520:8",
+        "sequence_raw_indices_by_stage": {"ae": "0:600:8", "ldm": "0:520:8"},
         "stored_frames_preserved": 75,
         "loaded_frames": 65,
+        "loaded_frames_by_stage": {"ae": 75, "ldm": 65},
         "sample_records": sample_records,
         "test_accessed": False,
     }

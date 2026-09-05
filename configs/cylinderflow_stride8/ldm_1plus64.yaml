@@ -11,6 +11,9 @@ data:
     data_path: null
     manifest: null
     strict_formal_counts: true
+    stage: ldm
+    sequence_start: 0
+    sequence_length: 65
     use_embed: false
   normalizer:
     use_norm: true

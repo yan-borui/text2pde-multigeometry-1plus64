@@ -30,6 +30,16 @@ def main(args):
     if args.checkpoint is not None:
         trainconfig["checkpoint"] = args.checkpoint
 
+    data_contract = None
+    if dataconfig["mode"] == "cylinderflow_stride8":
+        from tools.cylinderflow_stride8.protocol import (
+            stage_data_contract,
+            validate_locked_config,
+        )
+
+        validate_locked_config(config, "ae")
+        data_contract = stage_data_contract("ae")
+
     seed = trainconfig["seed"]
     start_examples_seen = 0
     exact_resume_modes = ("cylinderflow_windows", "cylinderflow_stride8")
@@ -71,7 +81,9 @@ def main(args):
     milestone_steps = trainconfig.get("milestone_every_n_steps")
     checkpoint_callbacks = []
     if dataconfig["mode"] in exact_resume_modes:
-        checkpoint_callbacks.append(ExactResumeCallback(start_examples_seen))
+        checkpoint_callbacks.append(
+            ExactResumeCallback(start_examples_seen, data_contract=data_contract)
+        )
     checkpoint_callbacks.extend(
         [
             ModelCheckpoint(
