@@ -116,9 +116,14 @@ def restore_rng_state(state: dict[str, Any]) -> None:
 
 
 def load_resume_record(checkpoint_path: str | Path) -> dict[str, Any]:
-    checkpoint = torch.load(Path(checkpoint_path), map_location="cpu")
+    checkpoint = torch.load(
+        Path(checkpoint_path), map_location="cpu", weights_only=False
+    )
     record = checkpoint.get(RESUME_KEY)
-    if not isinstance(record, dict) or record.get("schema") != RESUME_SCHEMA:
+    if not isinstance(record, dict) or record.get("schema") not in {
+        RESUME_SCHEMA,
+        "text2pde.cylinderflow.resume.ddp.v2",
+    }:
         raise ValueError(f"{checkpoint_path} has no exact CylinderFlow resume record")
     examples_seen = int(record["examples_seen"])
     if examples_seen < 0:

@@ -51,7 +51,9 @@ def main(args):
         validate_locked_config(config, "ldm")
         data_contract = stage_data_contract("ldm")
         first_stage_checkpoint = torch.load(
-            modelconfig["first_stage_config"]["pretrained_path"], map_location="cpu"
+            modelconfig["first_stage_config"]["pretrained_path"],
+            map_location="cpu",
+            weights_only=False,
         )
         validate_checkpoint_contract(first_stage_checkpoint, "ae")
         checkpoint_dependencies = {
@@ -60,6 +62,14 @@ def main(args):
         del first_stage_checkpoint
 
     seed = trainconfig["seed"]
+    distributed = int(trainconfig.get("devices", 1)) > 1
+    if distributed:
+        if int(os.environ.get("WORLD_SIZE", "1")) != trainconfig["devices"]:
+            raise ValueError("launch the four-device configuration through torchrun")
+        if not trainconfig.get("run_dir"):
+            raise ValueError("distributed training requires an explicit shared run_dir")
+        if trainconfig["accelerator"] == "gpu":
+            torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
     start_examples_seen = 0
     exact_resume_modes = ("cylinderflow_windows", "cylinderflow_stride8")
     if dataconfig["mode"] in exact_resume_modes and trainconfig["checkpoint"]:
@@ -91,7 +101,7 @@ def main(args):
             offline=trainconfig.get("wandb_offline", False),
         )
 
-    if torch.cuda.current_device() == 0:
+    if int(os.environ.get("RANK", "0")) == 0:
         os.makedirs(path, exist_ok=True)
         save_yaml(config, os.path.join(path, "config.yml"))
         print("Making folder on rank 0")
@@ -159,6 +169,28 @@ def main(args):
         modelconfig["scheduler_config"]["max_steps"] = trainconfig.get("max_steps", 0)
 
     datamodule = FluidsDataModule(dataconfig)
+    if distributed:
+        from modules.modules.distributed_resume import (
+            DistributedExactResumeCallback,
+            training_contract,
+        )
+
+        callbacks = [
+            callback
+            for callback in callbacks
+            if not isinstance(callback, ExactResumeCallback)
+        ]
+        callbacks.insert(
+            0,
+            DistributedExactResumeCallback(
+                start_examples_seen,
+                data_contract=data_contract,
+                dependencies=checkpoint_dependencies,
+                contract=training_contract(config),
+                seed=seed,
+                stop_after_updates=args.stop_after_updates,
+            ),
+        )
 
     model = LatentDiffusion(
         **modelconfig,
@@ -172,11 +204,12 @@ def main(args):
         check_val_every_n_epoch=trainconfig["check_val_every_n_epoch"],
         log_every_n_steps=trainconfig["log_every_n_steps"],
         max_epochs=trainconfig["max_epochs"],
-        max_steps=trainconfig.get("max_steps", -1),
+        max_steps=args.stop_after_updates or trainconfig.get("max_steps", -1),
         default_root_dir=path,
         callbacks=callbacks,
         logger=experiment_logger,
         strategy=trainconfig["strategy"],
+        use_distributed_sampler=not distributed,
         accumulate_grad_batches=trainconfig["accumulate_grad_batches"],
         precision=trainconfig.get("precision", "32-true"),
         deterministic=trainconfig.get("deterministic", False),
@@ -206,6 +239,7 @@ if __name__ == "__main__":
     parser.add_argument("--first-stage-checkpoint", default=None)
     parser.add_argument("--run-dir", default=None)
     parser.add_argument("--checkpoint", default=None)
+    parser.add_argument("--stop-after-updates", type=int, default=None)
     args = parser.parse_args()
 
     main(args)

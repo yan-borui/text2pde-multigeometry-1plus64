@@ -16,8 +16,22 @@ def materialize_config(
     normalizer_path: Path,
     result_root: Path,
     stage: str,
+    world_size: int = 1,
 ) -> dict[str, Any]:
     config = copy.deepcopy(template)
+    if world_size not in (1, 4):
+        raise ValueError("world_size must be one or four")
+    if world_size == 4:
+        config["training"].update(
+            devices=4,
+            strategy="ddp",
+            accumulate_grad_batches=1,
+            dist=True,
+            limit_val_batches=6,
+        )
+        config["data"].update(distributed_world_size=4, validation_global_batches=24)
+        if stage == "ldm":
+            config["model"]["dist"] = True
     validate_locked_config(config, stage)
     dataset = config["data"]["dataset"]
     dataset["data_path"] = str(data_path.resolve())
@@ -38,6 +52,7 @@ def main() -> None:
     parser.add_argument("--normalizer", type=Path, required=True)
     parser.add_argument("--result-root", type=Path, required=True)
     parser.add_argument("--stage", choices=("ae", "ldm"), required=True)
+    parser.add_argument("--world-size", type=int, choices=(1, 4), default=1)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     for path, label in (
@@ -54,6 +69,7 @@ def main() -> None:
         args.normalizer,
         args.result_root,
         args.stage,
+        args.world_size,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     save_yaml(config, args.output)

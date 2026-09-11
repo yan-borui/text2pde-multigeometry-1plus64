@@ -21,6 +21,10 @@ class FluidsDataModule(L.LightningDataModule):
         self.sampler_seed = int(dataconfig.get("sampler_seed", 0))
         self.train_start_offset = int(dataconfig.get("train_start_offset", 0))
         self.train_examples_seen = int(dataconfig.get("train_examples_seen", 0))
+        self.distributed_world_size = int(dataconfig.get("distributed_world_size", 1))
+        self.validation_global_batches = int(
+            dataconfig.get("validation_global_batches", 24)
+        )
 
         if "drop_last" in dataconfig.keys():
             self.drop_last = dataconfig["drop_last"]
@@ -148,6 +152,18 @@ class FluidsDataModule(L.LightningDataModule):
                 seed=self.sampler_seed,
                 start_examples_seen=self.train_examples_seen,
             )
+            if self.distributed_world_size > 1:
+                from modules.modules.distributed_sampling import (
+                    DistributedEpochPermutationSampler,
+                )
+
+                sampler = DistributedEpochPermutationSampler(
+                    self.train_dataset,
+                    self.sampler_seed,
+                    self.train_examples_seen,
+                    rank=self.trainer.global_rank,
+                    world_size=self.trainer.world_size,
+                )
             shuffle = False
         return DataLoader(
             self.train_dataset,
@@ -160,10 +176,21 @@ class FluidsDataModule(L.LightningDataModule):
         )
 
     def val_dataloader(self):
+        sampler = None
+        if self.mode == "cylinderflow_stride8" and self.distributed_world_size > 1:
+            from modules.modules.distributed_sampling import FixedValidationSampler
+
+            # Preserve the original training diagnostic's first 24 validation batches.
+            sampler = FixedValidationSampler(
+                range(min(self.validation_global_batches, len(self.val_dataset))),
+                self.trainer.global_rank,
+                self.trainer.world_size,
+            )
         return DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
             shuffle=False,
+            sampler=sampler,
             num_workers=self.num_workers,
             drop_last=self.drop_last,
         )

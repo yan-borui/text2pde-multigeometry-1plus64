@@ -6,6 +6,7 @@ import json
 import math
 import subprocess
 import time
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -28,7 +29,12 @@ from tools.cylinderflow_stride8.predictions import (
     save_prediction,
     writeback_velocity,
 )
-from tools.cylinderflow_stride8.evaluation_io import append_json, write_csv, write_json
+from tools.cylinderflow_stride8.evaluation_io import (
+    append_json,
+    write_csv,
+    write_json,
+    write_jsonl,
+)
 
 from tools.cylinderflow_stride8.joint64 import (
     derive_sample_seed,
@@ -55,7 +61,7 @@ def make_sampler(model):
 
 
 def checkpoint_identity(file_path: Path) -> tuple[int, dict[str, Any]]:
-    checkpoint = torch.load(file_path, map_location="cpu")
+    checkpoint = torch.load(file_path, map_location="cpu", weights_only=False)
     if "state_dict" not in checkpoint:
         raise KeyError(f"checkpoint has no state_dict: {file_path}")
     validate_checkpoint_contract(checkpoint, "ldm")
@@ -71,7 +77,7 @@ def instantiate_model(
 ) -> tuple[LatentDiffusion, int]:
     from modules.models.ddpm import LatentDiffusion
 
-    ae_state = torch.load(ae_checkpoint, map_location="cpu")
+    ae_state = torch.load(ae_checkpoint, map_location="cpu", weights_only=False)
     global_step, checkpoint = checkpoint_identity(checkpoint_path)
     dependencies = validate_ae_dependency(checkpoint, ae_state)
     del ae_state
@@ -103,6 +109,9 @@ def evaluate_one_checkpoint(
     seeds: tuple[int, ...],
     device: torch.device,
     sample_dir: Path | None,
+    *,
+    resume: bool = False,
+    fail_on_runtime_error: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     model, global_step = instantiate_model(
         config, checkpoint_path, ae_checkpoint, datamodule, device
@@ -133,10 +142,25 @@ def evaluate_one_checkpoint(
         "evaluation_code_commit": code_result.stdout.strip(),
     }
     if sample_dir is not None:
-        sample_dir.mkdir(parents=True, exist_ok=False)
+        sample_dir.mkdir(parents=True, exist_ok=resume)
+        identity_file = sample_dir.parent / "evaluation_identity.json"
+        identity = {**provenance, "indices": list(indices), "seeds": list(seeds)}
+        if identity_file.exists() and json.loads(identity_file.read_text()) != identity:
+            raise ValueError("evaluation resume identity mismatch")
+        write_json(identity_file, identity)
+        completed_file = sample_dir.parent / "completed_cases.json"
+        if resume and completed_file.exists():
+            rows = json.loads(completed_file.read_text())
+            if any(not Path(row["prediction_file"]).is_file() for row in rows):
+                raise ValueError("completed prediction file is missing")
+    completed = {(row["sample_index"], row["evaluation_seed"]) for row in rows}
+    if len(completed) != len(rows):
+        raise ValueError("duplicate completed evaluation samples")
 
     for evaluation_seed in seeds:
         for sample_index in indices:
+            if (sample_index, evaluation_seed) in completed:
+                continue
             sample = dataset.__getitem__(sample_index, eval=True)
             metadata = sample["metadata"]
             trajectory_index = int(metadata["trajectory_index"])
@@ -163,6 +187,8 @@ def evaluate_one_checkpoint(
                     pre_boundary, target[0], sample["node_type"].numpy()
                 )
             except (FloatingPointError, torch.cuda.OutOfMemoryError) as error:
+                if fail_on_runtime_error and isinstance(error, RuntimeError):
+                    raise
                 failure = f"{type(error).__name__}: {error}"
                 if device.type == "cuda":
                     torch.cuda.empty_cache()
@@ -221,8 +247,10 @@ def evaluate_one_checkpoint(
                     },
                 )
                 row["prediction_file"] = str(file_path.resolve())
-                append_json(sample_dir.parent / "case_metrics.jsonl", row)
+                append_json(sample_dir.parent / "case_metrics_journal.jsonl", row)
             rows.append(row)
+            if resume and sample_dir is not None:
+                write_json(completed_file, rows)
 
     if device.type == "cuda":
         torch.cuda.synchronize(device)
@@ -266,6 +294,7 @@ def evaluate_one_checkpoint(
         ),
     }
     if sample_dir is not None:
+        write_jsonl(sample_dir.parent / "case_metrics.jsonl", rows)
         write_csv(sample_dir.parent / "case_metrics.csv", rows)
         write_csv(
             sample_dir.parent / "trajectory_metrics.csv",
@@ -285,6 +314,8 @@ def evaluate_one_checkpoint(
 def render_representatives(
     output_dir: Path,
     rows: list[dict[str, Any]],
+    *,
+    resume: bool = False,
 ) -> dict[str, Any]:
     from tools.cylinderflow.metrics import render_comparison_gif, shared_visual_scales
 
@@ -327,6 +358,10 @@ def render_representatives(
         }
     scales = shared_visual_scales(paths)
     gif_dir = output_dir / "gifs_shared_scale"
+    if resume and gif_dir.exists():
+        if gif_dir.is_symlink():
+            raise ValueError("render output must be a local result directory")
+        gif_dir.rename(output_dir / f"gifs_shared_scale_incomplete_{uuid.uuid4().hex}")
     gif_dir.mkdir()
     for label, record in selections.items():
         gif_path = gif_dir / f"{label}.gif"

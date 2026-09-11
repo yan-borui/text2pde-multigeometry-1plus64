@@ -33,6 +33,17 @@ def validate_locked_config(config: dict[str, Any], stage: str) -> None:
         raise ValueError(f"unsupported training stage: {stage}")
     data = config["data"]
     training = config["training"]
+    devices = training.get("devices", 1)
+    if devices not in (1, 4):
+        raise ValueError("formal recipes support one or four devices")
+    if devices == 4:
+        if (
+            training.get("strategy") != "ddp"
+            or data.get("distributed_world_size") != 4
+            or data.get("validation_global_batches") != 24
+            or training.get("limit_val_batches") != 6
+        ):
+            raise ValueError("four-device sampler/Validation contract mismatch")
     expected_length = 75 if stage == "ae" else 65
     expected_dataset = {
         "stage": stage,
@@ -56,7 +67,7 @@ def validate_locked_config(config: dict[str, Any], stage: str) -> None:
     expected_training = {
         "seed": 42,
         "precision": "16-mixed",
-        "accumulate_grad_batches": 4,
+        "accumulate_grad_batches": 4 // devices,
         "dataset_size": 1000,
         "max_epochs": 1000,
         "max_steps": 250_000,

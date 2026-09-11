@@ -24,7 +24,7 @@ from tools.cylinderflow_stride8.protocol import (
 
 
 def checkpoint_identity(file_path: Path) -> tuple[int, dict[str, Any]]:
-    checkpoint = torch.load(file_path, map_location="cpu")
+    checkpoint = torch.load(file_path, map_location="cpu", weights_only=False)
     if "state_dict" not in checkpoint:
         raise KeyError(f"checkpoint has no state_dict: {file_path}")
     validate_checkpoint_contract(checkpoint, "ae")

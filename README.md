@@ -1,5 +1,9 @@
 # Text2PDE on MeshGraphNets CylinderFlow
 
+The optional [four-GPU AE → LDM workflow](FOUR_GPU.md) preserves global batch 4,
+native schedules and mixed precision, with rank-local checkpoint recovery and
+distributed checkpoint selection/Validation. The original single-device entry follows.
+
 ## Phase-zero stride-8 joint `1 -> 64` workflow
 
 The `feature/cylinderflow-stride8-1plus64` workflow retrains the established

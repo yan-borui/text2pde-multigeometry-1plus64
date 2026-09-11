@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -25,10 +26,12 @@ def clean_json(value):
 
 def write_json(file_path: Path, value) -> None:
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_text(
+    temporary = file_path.with_name(file_path.name + ".tmp")
+    temporary.write_text(
         json.dumps(clean_json(value), indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+    os.replace(temporary, file_path)
 
 
 def append_json(file_path: Path, value) -> None:
@@ -36,6 +39,17 @@ def append_json(file_path: Path, value) -> None:
         handle.write(
             json.dumps(clean_json(value), sort_keys=True, allow_nan=False) + "\n"
         )
+
+
+def write_jsonl(file_path: Path, rows: list[dict]) -> None:
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = file_path.with_name(file_path.name + ".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(
+                json.dumps(clean_json(row), sort_keys=True, allow_nan=False) + "\n"
+            )
+    os.replace(temporary, file_path)
 
 
 def write_csv(file_path: Path, rows: list[dict]) -> None:
