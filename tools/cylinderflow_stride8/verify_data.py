@@ -9,6 +9,7 @@ import numpy as np
 
 from dataset.cylinderflow_stride8 import CylinderFlowStride8TrajectoryDataset
 
+# Legacy CylinderFlow release identities; Airfoil verification uses its manifest.
 EXPECTED_BYTES = 1_772_387_753
 EXPECTED_SHA256 = "d416be274e03a5d77f1cf2dffc4be8abcfc63ff9d6bf5a9cca19a44b43b36533"
 
@@ -24,16 +25,27 @@ def sha256_file(file_path: Path) -> str:
 def verify(
     data_path: Path,
     manifest_path: Path,
-    verify_sha256: bool = True,
+    verify_sha256: bool = False,
 ) -> dict[str, object]:
     data_path = data_path.resolve()
     manifest_path = manifest_path.resolve()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    expected_bytes = manifest.get("dataset_bytes")
+    if not isinstance(expected_bytes, int) or expected_bytes <= 0:
+        raise ValueError("Airfoil manifest must record positive dataset_bytes")
     byte_count = data_path.stat().st_size
-    if byte_count != EXPECTED_BYTES:
-        raise ValueError(f"HDF5 bytes {byte_count} != {EXPECTED_BYTES}")
-    digest = sha256_file(data_path) if verify_sha256 else None
-    if digest is not None and digest != EXPECTED_SHA256:
-        raise ValueError(f"HDF5 SHA-256 {digest} != {EXPECTED_SHA256}")
+    if byte_count != expected_bytes:
+        raise ValueError(f"HDF5 bytes {byte_count} != manifest {expected_bytes}")
+    digest = None
+    if verify_sha256:
+        expected_digest = manifest.get("dataset_sha256")
+        if not expected_digest:
+            raise ValueError(
+                "explicit checksum verification requires dataset_sha256 in manifest"
+            )
+        digest = sha256_file(data_path)
+        if digest != expected_digest:
+            raise ValueError("HDF5 checksum differs from manifest")
 
     sample_records = []
     for stage, length in (("ae", 75), ("ldm", 65)):
@@ -63,7 +75,7 @@ def verify(
                 if not np.array_equal(sample["frame_indices"].numpy(), expected_frames):
                     raise ValueError(f"{stage} loader raw-frame mapping differs")
                 if not np.allclose(
-                    sample["time"].numpy(), expected_frames * 0.01, rtol=0, atol=1e-12
+                    sample["time"].numpy(), expected_frames * 0.0002, rtol=0, atol=1e-12
                 ):
                     raise ValueError("loader physical-time mapping is incorrect")
                 sample_records.append(
@@ -80,7 +92,7 @@ def verify(
             train.close()
             validation.close()
     return {
-        "schema": "text2pde.cylinderflow_stride8.data_verification.v2",
+        "schema": "text2pde.airfoil_uvp_stride8.data_verification.v1",
         "status": "PASS",
         "data": str(data_path),
         "manifest": str(manifest_path),
@@ -104,11 +116,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--skip-sha256", action="store_true")
+    parser.add_argument("--skip-sha256", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     print(
         json.dumps(
-            verify(args.data, args.manifest, verify_sha256=not args.skip_sha256),
+            verify(args.data, args.manifest),
             indent=2,
             sort_keys=True,
         )

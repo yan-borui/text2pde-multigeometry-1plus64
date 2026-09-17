@@ -47,10 +47,10 @@ def prepare_release(
     (output_dir / "data").mkdir(parents=True)
     (output_dir / "metadata").mkdir()
     destinations = {
-        data_path: output_dir / "data" / "cylinderflow_stride8_75frames.h5",
+        data_path: output_dir / "data" / "airfoil_stride8_75frames.h5",
         manifest_path: output_dir
         / "metadata"
-        / "cylinderflow_stride8_75frames_manifest.json",
+        / "airfoil_stride8_75frames_manifest.json",
         audit_path: output_dir / "metadata" / "dataset_audit.json",
         license_path: output_dir / "LICENSE",
         template_dir / "README.md": output_dir / "README.md",
@@ -86,8 +86,8 @@ def prepare_release(
             "NOTICE",
             "README.md",
             "TEST_NOT_ACCESSED.txt",
-            "data/cylinderflow_stride8_75frames.h5",
-            "metadata/cylinderflow_stride8_75frames_manifest.json",
+            "data/airfoil_stride8_75frames.h5",
+            "metadata/airfoil_stride8_75frames_manifest.json",
             "metadata/dataset_audit.json",
             "metadata/train_normal_stats.pkl",
         ]

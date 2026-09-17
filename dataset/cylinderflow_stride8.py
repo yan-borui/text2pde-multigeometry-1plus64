@@ -10,19 +10,19 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-DATA_FORMAT = "dgn4cfd.mgn_cylinderflow_temporal_stride.v1"
+DATA_FORMAT = "dgn4cfd.mgn_airfoil_uvp_temporal_stride.v1"
 STORED_FRAME_COUNT = 75
-RAW_FRAME_COUNT = 600
-RAW_FRAME_DT = 0.01
+RAW_FRAME_COUNT = 601
+RAW_FRAME_DT = 0.0002
 TEMPORAL_STRIDE = 8
-FRAME_DT = 0.08
+FRAME_DT = 0.0016
 PHASE_OFFSET = 0
 SEQUENCE_START = 0
 SEQUENCE_LENGTH = 65
 FORMAL_SPLIT_COUNTS = {"train": 1000, "validation": 100}
-SOURCE_NODE_TYPES = frozenset((0, 4, 5, 6))
+SOURCE_NODE_TYPES = frozenset((0, 2, 4))
 EXPECTED_SOURCE_FRAME_INDICES = np.arange(
-    PHASE_OFFSET, RAW_FRAME_COUNT, TEMPORAL_STRIDE, dtype=np.int64
+    PHASE_OFFSET, 600, TEMPORAL_STRIDE, dtype=np.int64
 )
 USED_SOURCE_FRAME_INDICES = EXPECTED_SOURCE_FRAME_INDICES[:SEQUENCE_LENGTH]
 
@@ -250,15 +250,6 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
 
     def _open(self) -> h5py.File:
         if self._handle is None:
-            if self.strict_formal_counts and h5py.version.hdf5_version_tuple < (
-                2,
-                0,
-                0,
-            ):
-                raise RuntimeError(
-                    "the locked stride-8 HDF5 uses HDF5 2.0 object layouts; "
-                    "install h5py>=3.16 with an HDF5>=2.0 runtime"
-                )
             handle = h5py.File(self.data_path, "r")
             try:
                 self._validate_hdf5_root(handle)
@@ -269,10 +260,7 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
         return self._handle
 
     def _validate_hdf5_root(self, handle: h5py.File) -> None:
-        # The locked file was written by HDF5 2.0. Its boolean attributes use a
-        # datatype that the established Text2PDE HDF5 1.14 runtime cannot decode.
-        # The hash-locked manifest validates those booleans; all portable numeric
-        # identity attributes are checked directly here.
+        # Airfoil preparation writes portable HDF5 attributes.
         scalar_attributes = {
             "format": DATA_FORMAT,
             "frames": STORED_FRAME_COUNT,

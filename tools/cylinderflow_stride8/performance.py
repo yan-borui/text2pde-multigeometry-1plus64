@@ -225,7 +225,7 @@ def benchmark(
         "measured_repeats_per_trajectory": MEASURED_REPEATS,
         "microbatch": 1,
         "future_frames": FUTURE_FRAMES,
-        "physical_dt": 0.08,
+        "physical_dt": 0.0016,
         "sampling_labels": list(range(MEASURED_REPEATS)),
         "seed_rule": "((draw+1)*1000003 + trajectory_index*9176) mod (2**31-1)",
         "input": "CPU physical initial UVP and static geometry; disk-backed static caches resident in CPU memory",

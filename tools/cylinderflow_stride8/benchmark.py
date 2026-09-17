@@ -26,8 +26,8 @@ from tools.cylinderflow_stride8.protocol import (
     validation_monitor_indices,
 )
 
-DATA_REPOSITORY = "DingDong1921/mgn-cylinderflow-stride8-75frames"
-DATA_REVISION = "8eae2c7a697e7d01f3b98f4d642ea476784df84a"
+DATA_REPOSITORY = "dm-meshgraphnets/airfoil"
+DATA_REVISION = "airfoil.uvp.stride8.first75.v1"
 
 
 def forecast_initial(model, sampler, sample: dict) -> np.ndarray:

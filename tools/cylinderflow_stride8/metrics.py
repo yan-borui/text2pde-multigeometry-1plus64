@@ -315,7 +315,7 @@ def compute_metrics(
         "boundary_uv_rmse": _masked_uv_rmse(velocity_error, node_type != 0),
         "inlet_uv_rmse": _masked_uv_rmse(velocity_error, node_type == 4),
         "outlet_uv_rmse": _masked_uv_rmse(velocity_error, node_type == 5),
-        "wall_uv_rmse": _masked_uv_rmse(velocity_error, node_type == 6),
+        "airfoil_surface_uv_rmse": _masked_uv_rmse(velocity_error, node_type == 2),
         "per_frame_uv_relative_rmse": per_frame_uv,
         "frame24_uv_relative_rmse": per_frame_uv[24],
         "frame25_uv_relative_rmse": per_frame_uv[25],

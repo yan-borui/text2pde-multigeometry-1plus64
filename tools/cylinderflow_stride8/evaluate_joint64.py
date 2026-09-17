@@ -201,7 +201,7 @@ def evaluate_one_checkpoint(
                 sample["mesh_pos"].numpy(),
                 sample["cells"].numpy(),
                 sample["node_type"].numpy(),
-                dt=0.08,
+                dt=0.0016,
             )
             metrics.update(
                 boundary_metrics(
@@ -467,10 +467,10 @@ def main() -> None:
     summary = {
         "schema": "text2pde.cylinderflow_stride8.joint64_evaluation.v2",
         "data_contract": stage_data_contract("ldm"),
-        "evaluator": "cylinderflow.physical_mesh.v1",
+        "evaluator": "airfoil.uvp.physical_mesh.v1",
         "mode": args.mode,
         "selection_metric": "failed clips, then mean trajectory UV relative RMSE, then earlier update",
-        "physical_dt": 0.08,
+        "physical_dt": 0.0016,
         "sequence_raw_indices": "0:520:8",
         "condition": "clean frame 0 only",
         "prediction": "frames 1 through 64 from one joint DDIM sample",

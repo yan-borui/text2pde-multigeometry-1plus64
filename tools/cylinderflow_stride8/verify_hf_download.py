@@ -18,8 +18,8 @@ EXPECTED_RELEASE_FILES = [
     "NOTICE",
     "README.md",
     "TEST_NOT_ACCESSED.txt",
-    "data/cylinderflow_stride8_75frames.h5",
-    "metadata/cylinderflow_stride8_75frames_manifest.json",
+    "data/airfoil_stride8_75frames.h5",
+    "metadata/airfoil_stride8_75frames_manifest.json",
     "metadata/dataset_audit.json",
     "metadata/train_normal_stats.pkl",
 ]
@@ -42,8 +42,8 @@ def verify_download(root: Path, revision: str) -> dict[str, object]:
     )
     if files != EXPECTED_FILES:
         raise ValueError(f"downloaded file set differs: {files}")
-    data_path = root / "data" / "cylinderflow_stride8_75frames.h5"
-    manifest_path = root / "metadata" / "cylinderflow_stride8_75frames_manifest.json"
+    data_path = root / "data" / "airfoil_stride8_75frames.h5"
+    manifest_path = root / "metadata" / "airfoil_stride8_75frames_manifest.json"
     identity = verify(data_path, manifest_path, verify_sha256=True)
 
     with (root / "metadata" / "train_normal_stats.pkl").open("rb") as handle:

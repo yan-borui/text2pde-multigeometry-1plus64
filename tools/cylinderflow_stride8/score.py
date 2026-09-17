@@ -8,7 +8,7 @@ from .metrics import compute_metrics, summarize_trajectories
 from .predictions import boundary_metrics, validate_prediction
 from .evaluation_io import append_json, write_csv, write_json
 
-EVALUATOR_VERSION = "cylinderflow.physical_mesh.v1"
+EVALUATOR_VERSION = "airfoil.uvp.physical_mesh.v1"
 
 
 def score(inputs, output_dir):
@@ -28,7 +28,7 @@ def score(inputs, output_dir):
                 bundle["points"],
                 bundle["cells"],
                 bundle["node_type"],
-                0.08,
+                0.0016,
             )
             metrics.update(
                 boundary_metrics(

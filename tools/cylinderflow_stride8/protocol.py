@@ -11,7 +11,7 @@ SAMPLING_SEEDS = (0, 1, 2)
 DDIM_STEPS = 20
 VALIDATION_TRAJECTORY_COUNT = 100
 MONITOR_TRAJECTORY_COUNT = 24
-STAGE_PROTOCOL = "text2pde.cylinderflow_stride8.ae75.joint65.v2"
+STAGE_PROTOCOL = "text2pde.airfoil_uvp_stride8.ae75.joint65.v1"
 
 
 def validation_monitor_indices(

@@ -8,17 +8,17 @@ from typing import Any
 
 import numpy as np
 
-PREDICTION_SCHEMA = "cylinderflow.physical_prediction.v2"
+PREDICTION_SCHEMA = "airfoil.uvp.physical_prediction.v1"
 RAW_FRAME_INDICES = np.arange(0, 513, 8, dtype=np.int64)
-PHYSICAL_TIME = np.arange(65, dtype=np.float64) * 0.08
+PHYSICAL_TIME = np.arange(65, dtype=np.float64) * 0.0016
 
 
 def writeback_velocity(
     prediction: np.ndarray, initial: np.ndarray, node_type: np.ndarray
 ) -> np.ndarray:
-    """Clamp only inlet/wall UV to the observed first frame after decoding."""
+    """Airfoil boundary UV is time-varying: preserve every predicted channel."""
     result = np.asarray(prediction).copy()
-    mask = np.isin(np.asarray(node_type).reshape(-1), (4, 6))
+    mask = np.zeros(np.asarray(node_type).size, dtype=bool)
     result[1:, mask, :2] = np.asarray(initial)[None, mask, :2]
     return result
 
@@ -29,8 +29,8 @@ def boundary_metrics(
     initial: np.ndarray,
     node_type: np.ndarray,
 ) -> dict[str, float | None]:
-    """Unweighted inlet/wall UV error against known, fixed boundary values."""
-    mask = np.isin(np.asarray(node_type).reshape(-1), (4, 6))
+    """No fixed Airfoil boundary is prescribed; writeback diagnostics are null."""
+    mask = np.zeros(np.asarray(node_type).size, dtype=bool)
     result = {}
     for label, values in (("pre", pre_boundary), ("post", prediction)):
         error = np.asarray(values)[1:, mask, :2] - np.asarray(initial)[None, mask, :2]
@@ -64,7 +64,7 @@ def validate_prediction(bundle: Any) -> None:
     if np.shape(bundle["physical_time"]) != (65,) or not np.allclose(
         bundle["physical_time"], PHYSICAL_TIME, rtol=0, atol=1e-12
     ):
-        raise ValueError("prediction physical time differs from dt=0.08")
+        raise ValueError("prediction physical time differs from dt=0.0016")
     nodes = len(bundle["points"])
     for name in ("prediction", "pre_boundary", "target"):
         if np.shape(bundle[name]) != (65, nodes, 3):
