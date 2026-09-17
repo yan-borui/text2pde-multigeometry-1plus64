@@ -3,19 +3,31 @@
 分支：`feature/airfoil-uvp-4gpu`。在一个节点上使用四张已分配的 CUDA GPU；
 `scripts/airfoil_4gpu.sh` 是当前训练/恢复入口。原 CylinderFlow 文档及测试记录保留其历史适用范围。
 
-## 数据准备
+## 自动完成全量数据准备
 
-使用 DeepMind MeshGraphNets 官方 Airfoil `meta.json`、`train.tfrecord`、`valid.tfrecord`。
-三份原始文件放在同一目录。六仓库携带相同的转换器；完整转换只执行一次，随后共享输出。
+训练入口自动执行完整数据准备，不需要手工下载、转换或运行单独的准备步骤。
+默认原始目录为`/data/datasets/meshgraphnets/airfoil`，可通过`RAW_DATA_DIR`修改。
+`DATA_DIR`默认是原始目录加`_uvp_stride8`；六仓库指向同一个目录即可共享数据。
+
+入口依次完成：
+
+1. 复用已有`meta.json`、`train.tfrecord`、`valid.tfrecord`；缺失文件从官方地址自动下载，支持断点续传。
+2. 流式转换全部Train1000条、Validation100条，时间stride8，固定前75帧，仅保留UVP。
+3. 计算Train-only归一化，生成HDF5、manifest和`text2pde_normalizer.pkl`。
+4. 自动生成该方法的图/统计量缓存；DiT在取得VGAE权重后自动生成Train latent缓存。
+5. 通过既有四卡入口开始训练。已完成的数据和缓存自动复用；多个仓库同时启动会等待共享锁，避免重复转换。
+
+若只处理数据而不启动模型：
 
 ```bash
-python -m airfoil_data.prepare --raw-dir /data/datasets/meshgraphnets/airfoil --output-dir /shared/data/airfoil_uvp_stride8
-export DATA_DIR=/shared/data/airfoil_uvp_stride8
+RAW_DATA_DIR=/data/datasets/meshgraphnets/airfoil bash scripts/airfoil_4gpu.sh data
 ```
 
-输出 `airfoil_stride8_75frames.h5`、同名 `_manifest.json` 和 `text2pde_normalizer.pkl`。
-转换器流式读取每条轨迹，使用已有 NumPy/h5py，无需 TensorFlow；不加载模型，不读取 Test。
-输出目录必须没有既有目标文件，失败的 `.partial.h5` 保留；重试使用新输出目录。
+这一步只使用CPU和已有NumPy/h5py，不需要GPU或TensorFlow。离线环境可设置`AIRFOIL_OFFLINE=1`。
+数据日志和状态分别为`$DATA_DIR/preparation.log`、`preparation_status.json`。
+转换在独立暂存目录进行，全部1100条完成后再发布；失败的暂存数据和日志保留，重试入口会重新转换。
+输出仍为`airfoil_stride8_75frames.h5`、`airfoil_stride8_75frames_manifest.json`和normalizer。
+Test不下载、不读取。`prepare`可选地提前完成本方法缓存，`train`会自动包含这些步骤。
 
 ## 固定任务
 
@@ -73,6 +85,6 @@ bash scripts/airfoil_4gpu.sh resume
 ## 本次验证范围
 
 本次完成源码、配置、Python/JSON/TOML语法、shell `bash -n`、Ruff F/E9和Git空白检查。
-未启动Airfoil训练、模型测试或四卡验收；四卡目标设备、NCCL、完整数据转换和最大网格容量
-仍需在实际集群环境确认。历史CylinderFlow测试与结果不构成本分支的运行证据。
-5090现场只进行了数据/源码/运行状态读取，没有部署修改、训练测试或进程控制。
+未启动Airfoil模型训练或四卡验收；四卡目标设备、NCCL和最大网格容量仍需在实际集群环境确认。
+全量数据转换属于CPU数据准备，其完成状态、日志及轨迹数记录在`$DATA_DIR`中。
+历史CylinderFlow测试与结果不构成本分支的运行证据。5090上的既有训练源码和GPU进程保持原状。
