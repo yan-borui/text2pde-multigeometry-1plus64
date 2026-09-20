@@ -1,5 +1,7 @@
 # Text2PDE on MeshGraphNets CylinderFlow
 
+**同机推理测速与 Validation100：**[运行说明与 Pareto 绘图交接](PARETO.md)。
+
 The optional [four-GPU AE → LDM workflow](FOUR_GPU.md) preserves global batch 4,
 native schedules and mixed precision, with rank-local checkpoint recovery and
 distributed checkpoint selection/Validation. The original single-device entry follows.
