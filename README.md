@@ -1,5 +1,7 @@
 # Text2PDE on MeshGraphNets CylinderFlow
 
+**历史 checkpoint UV 误差表：**[逐点 Validation100、断点续跑与图片交接](TRAINING_CURVE.md)。
+
 **同机推理测速与 Validation100：**[运行说明与 Pareto 绘图交接](PARETO.md)。
 
 The optional [four-GPU AE → LDM workflow](FOUR_GPU.md) preserves global batch 4,
