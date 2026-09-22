@@ -1,3 +1,5 @@
+**重复采样与物理均值场：**[固定权重的方差、K扫描及推理成本](SAMPLING.md)。
+
 # Text2PDE on MeshGraphNets CylinderFlow
 
 **历史 checkpoint UV 误差表：**[逐点 Validation100、断点续跑与图片交接](TRAINING_CURVE.md)。
