@@ -51,10 +51,9 @@ def main():
         raise FileExistsError("choose a new result root or use --resume")
     result.mkdir(parents=True, exist_ok=True)
     # One orchestrator owns both dependent stages for the lifetime of the allocation.
-    import fcntl
+    from .portable_lock import DirectoryLock
 
-    lock = (result / ".pipeline.lock").open("a")
-    fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    lock = DirectoryLock(result / ".pipeline.lock").acquire()
     try:
         logs = result / "logs"
         logs.mkdir(exist_ok=True)

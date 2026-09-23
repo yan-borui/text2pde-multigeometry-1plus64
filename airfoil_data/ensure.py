@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
-import fcntl
 import json
 from pathlib import Path
 import sys
@@ -25,14 +24,10 @@ NORMALIZER = "text2pde_normalizer.pkl"
 
 @contextmanager
 def exclusive_lock(file: Path):
-    file.parent.mkdir(parents=True, exist_ok=True)
-    with file.open("a") as handle:
-        print(f"Waiting for preparation lock: {file}", flush=True)
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    from .portable_lock import DirectoryLock
+
+    with DirectoryLock(file, wait=True):
+        yield
 
 
 class Tee:
