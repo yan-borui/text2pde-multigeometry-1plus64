@@ -1,5 +1,7 @@
 # Text2PDE on MeshGraphNets CylinderFlow
 
+**NAS 运行：**[启动入口与共享目录设置](NAS.md)。
+
 The optional [four-GPU AE → LDM workflow](FOUR_GPU.md) preserves global batch 4,
 native schedules and mixed precision, with rank-local checkpoint recovery and
 distributed checkpoint selection/Validation. The original single-device entry follows.
