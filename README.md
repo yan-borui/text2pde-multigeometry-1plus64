@@ -2,6 +2,8 @@
 
 **NAS 运行：**[启动入口与共享目录设置](NAS.md)。
 
+**多次采样：**[Validation100 均值、方差与成本](SAMPLING.md)。
+
 `feature/airfoil-uvp-4gpu`提供默认四卡的Airfoil训练与恢复入口。
 完整数据契约、环境、固定配方和命令见[Airfoil操作说明](AIRFOIL.md)。
 

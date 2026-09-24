@@ -82,6 +82,11 @@ bash scripts/airfoil_4gpu.sh resume
 数据模块与入口保留`cylinderflow_stride8`名称以复用Lightning流程；实际契约、节点、时间轴
 和checkpoint阶段身份已切换到Airfoil。HDF5使用兼容布局，移除旧CylinderFlow文件的HDF5 2.0专用门槛。
 
+## 多次采样
+
+已选权重的 Validation100 重复生成、物理均值与方差、各 K 成本通过
+[多次采样入口](SAMPLING.md)运行，默认每条轨迹生成 16 次。
+
 ## 本次验证范围
 
 本次完成源码、配置、Python/JSON/TOML语法、shell `bash -n`、Ruff F/E9和Git空白检查。
