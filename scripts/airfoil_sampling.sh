@@ -30,6 +30,6 @@ else
     [[ -s "$selection" ]] || { printf 'Missing AE selection: %s\n' "$selection" >&2; exit 2; }
     ae_checkpoint=$(< "$selection")
 fi
-exec bash "$code_root/scripts/nas.sh" python sampling_ensemble.py \
+exec bash "$code_root/scripts/nas.sh" python "${SAMPLING_ENTRYPOINT:-sampling_ensemble.py}" \
     --config "$config" --checkpoint "$checkpoint" --ae-checkpoint "$ae_checkpoint" \
     --output-dir "$OUTPUT_DIR" --device "${DEVICE:-cuda:0}" "$@"

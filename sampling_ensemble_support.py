@@ -221,10 +221,12 @@ def draw(adapter: dict, sample: dict, label: int) -> tuple[np.ndarray, int]:
     return adapter["predict"](sample, seed), seed
 
 
-def ensemble(adapter: dict, sample: dict, count: int) -> np.ndarray:
+def ensemble(
+    adapter: dict, sample: dict, count: int, seed_offset: int = 0
+) -> np.ndarray:
     total = None
     for label in range(count):
-        values = draw(adapter, sample, label)[0].astype(np.float64)
+        values = draw(adapter, sample, seed_offset + label)[0].astype(np.float64)
         total = values if total is None else total + values
     mean = (total / count).astype(np.float32)
     mean[0] = sample["initial"]
@@ -290,7 +292,8 @@ def scalar_statistics(rows: list[dict]) -> dict:
     return result
 
 
-def run(method: str) -> None:
+def build_parser(method: str) -> argparse.ArgumentParser:
+    """Expose the native sampling arguments to the grouped entrypoint."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
     if method == "dit":
@@ -310,10 +313,18 @@ def run(method: str) -> None:
         "--ensemble-sizes", type=int, nargs="+", default=[1, 2, 4, 8, 16]
     )
     parser.add_argument("--skip-timing", action="store_true")
+    parser.add_argument("--seed-offset", type=int, default=0)
+    return parser
+
+
+def run(method: str) -> None:
+    parser = build_parser(method)
     args = parser.parse_args()
     sizes = sorted(set(args.ensemble_sizes))
     if args.samples < 2 or not sizes or sizes[0] < 1 or sizes[-1] > args.samples:
         parser.error("samples >= 2 and 1 <= ensemble sizes <= samples required")
+    if args.seed_offset < 0 or args.seed_offset + args.samples >= 2**31 - 1:
+        parser.error("sampling label range must lie within [0, 2**31-2)")
     if int(os.environ.get("WORLD_SIZE", "1")) != 1:
         parser.error("use the standalone single-process evaluation entrypoint")
     device = torch.device(args.device)
@@ -374,9 +385,10 @@ def run(method: str) -> None:
                     "provenance": adapter["provenance"],
                     "data_identity": adapter["data_identity"],
                     "samples": args.samples,
+                    "seed_offset": args.seed_offset,
                     "ensemble_sizes": sizes,
                     "test_accessed": False,
-                    "seed_rule": "((label+1)*1000003 + trajectory_index*9176) mod (2**31-1)",
+                    "seed_rule": "((seed_offset+label+1)*1000003 + trajectory_index*9176) mod (2**31-1)",
                     "variance": "unbiased per-node physical UVP variance across draws; ddof=1",
                     "pressure_variance": "raw physical pressure; score uses native gauge adjustment",
                     "training_seed_variation": False,
@@ -403,7 +415,7 @@ def run(method: str) -> None:
                         "trajectory_index": trajectory,
                         "sampling_label": label,
                     }
-                    prediction, seed = draw(adapter, sample, label)
+                    prediction, seed = draw(adapter, sample, args.seed_offset + label)
                     member_seeds.append(seed)
                     if target is None:
                         target = adapter["target"](index)
@@ -570,7 +582,9 @@ def run(method: str) -> None:
                         method=method,
                         indices=selected,
                         load_case=adapter["initial"],
-                        predict=lambda sample, k=count: ensemble(adapter, sample, k),
+                        predict=lambda sample, k=count: ensemble(
+                            adapter, sample, k, args.seed_offset
+                        ),
                         device=device,
                         output_dir=args.output_dir / "timing" / f"k{count}",
                         data_identity=adapter["data_identity"],
@@ -582,7 +596,9 @@ def run(method: str) -> None:
                                 "member RNG reseeding",
                                 "float64 mean reduction",
                             ],
-                            "timing_member_labels": list(range(count)),
+                            "timing_member_labels": list(
+                                range(args.seed_offset, args.seed_offset + count)
+                            ),
                         },
                         models=adapter["models"],
                         model_load_seconds=load_seconds,
