@@ -87,6 +87,12 @@ bash scripts/airfoil_4gpu.sh resume
 已选权重的 Validation100 重复生成、物理均值与方差、各 K 成本通过
 [多次采样入口](SAMPLING.md)运行，默认每条轨迹生成 16 次。
 
+## 训练显存
+
+四卡训练入口自动记录 AE 与 LDM 各阶段、各 GPU 的累计 allocated/reserved 峰值，
+并汇总所有 rank 的最大值。记录包含设备、精度、更新数、epoch 和 checkpoint 身份。
+采集范围、恢复训练与历史日志的处理见[训练显存说明](TRAINING_MEMORY.md)。
+
 ## 本次验证范围
 
 本次完成源码、配置、Python/JSON/TOML语法、shell `bash -n`、Ruff F/E9和Git空白检查。

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -90,6 +91,90 @@ class DistributedExactResumeCallback(L.Callback):
         self.started = time.perf_counter()
         self.initial_parameters = None
         self.finalized = False
+        self.memory_segment = None
+        self.memory_start_update = None
+        self.memory_started = None
+
+    def _local_memory(self, trainer: L.Trainer, pl_module: L.LightningModule) -> dict:
+        """Read this process's cumulative CUDA peaks without resetting them."""
+        record = {"rank": trainer.global_rank, "device": str(pl_module.device)}
+        if pl_module.device.type == "cuda":
+            device = pl_module.device
+            allocated = int(torch.cuda.max_memory_allocated(device))
+            reserved = int(torch.cuda.max_memory_reserved(device))
+            properties = torch.cuda.get_device_properties(device)
+            record.update(
+                gpu_name=torch.cuda.get_device_name(device),
+                gpu_total_bytes=int(properties.total_memory),
+                peak_allocated_bytes=allocated,
+                peak_reserved_bytes=reserved,
+                allocated_gib=allocated / 2**30,
+                reserved_gib=reserved / 2**30,
+            )
+        return record
+
+    def _record_metrics(
+        self,
+        trainer: L.Trainer,
+        pl_module: L.LightningModule,
+        event: str,
+        checkpoint_id: str | None = None,
+    ) -> dict | None:
+        """Collect all ranks at a shared hook; preserve the existing metrics log."""
+        if self.memory_segment is None:
+            return None
+        ranks = [None] * trainer.world_size
+        dist.all_gather_object(ranks, self._local_memory(trainer, pl_module))
+        elapsed = self.elapsed_prior + time.perf_counter() - self.started
+        cuda_ranks = [row for row in ranks if "peak_allocated_bytes" in row]
+        record = {
+            "schema": "text2pde.training_memory.v1",
+            "event": event,
+            "stage": (self.data_contract or {}).get("stage", "unknown"),
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "update": int(trainer.global_step),
+            "epoch": int(trainer.current_epoch),
+            "checkpoint_id": checkpoint_id,
+            "examples_seen": self.examples_seen,
+            "world_size": trainer.world_size,
+            "gpu_count": len(cuda_ranks),
+            "precision": str(trainer.precision),
+            "torch_version": str(torch.__version__),
+            "cuda_version": torch.version.cuda,
+            "lightning_version": L.__version__,
+            "rank_metrics": ranks,
+            "max_allocated_bytes": max(
+                (row["peak_allocated_bytes"] for row in cuda_ranks), default=None
+            ),
+            "max_reserved_bytes": max(
+                (row["peak_reserved_bytes"] for row in cuda_ranks), default=None
+            ),
+            "memory_segment": self.memory_segment,
+            "memory_start_update": self.memory_start_update,
+            "memory_elapsed_seconds": time.perf_counter() - self.memory_started,
+            "memory_scope": "since_train_start_including_in_training_validation",
+            "sanity_validation_included": False,
+            "historical_memory_restored": False,
+            "elapsed_seconds": elapsed,
+            "validation_seconds": self.validation_seconds,
+            "allocated_gpu_hours": trainer.world_size * elapsed / 3600
+            if pl_module.device.type == "cuda"
+            else None,
+        }
+        if trainer.is_global_zero:
+            folder = Path(trainer.default_root_dir)
+            with (folder / "distributed_metrics.jsonl").open(
+                "a", encoding="utf-8"
+            ) as handle:
+                handle.write(json.dumps(record) + "\n")
+            # Keep each process segment separately when a run resumes.
+            summary_dir = folder / "training_memory"
+            summary_dir.mkdir(exist_ok=True)
+            destination = summary_dir / f"{self.memory_segment}.json"
+            temporary = destination.with_suffix(".tmp")
+            temporary.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+            os.replace(temporary, destination)
+        return record
 
     @property
     def state_key(self):
@@ -127,6 +212,12 @@ class DistributedExactResumeCallback(L.Callback):
         self.started = time.perf_counter()
         if pl_module.device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(pl_module.device)
+        segment = [str(uuid.uuid4()) if trainer.is_global_zero else None]
+        dist.broadcast_object_list(segment, src=0)
+        self.memory_segment = segment[0]
+        self.memory_start_update = int(trainer.global_step)
+        self.memory_started = time.perf_counter()
+        self._record_metrics(trainer, pl_module, "train_start")
         if self.stop_after_updates is not None:
             self.initial_parameters = {
                 name: parameter.detach().cpu().clone()
@@ -139,33 +230,7 @@ class DistributedExactResumeCallback(L.Callback):
         self.last_train_rng = capture_local_rng(pl_module.device)
         every = self.contract["training"].get("log_every_n_steps", 20)
         if trainer.global_step == 1 or trainer.global_step % every == 0:
-            local = {"rank": trainer.global_rank, "device": str(pl_module.device)}
-            if pl_module.device.type == "cuda":
-                local.update(
-                    allocated_gib=torch.cuda.max_memory_allocated(pl_module.device)
-                    / 2**30,
-                    reserved_gib=torch.cuda.max_memory_reserved(pl_module.device)
-                    / 2**30,
-                )
-            ranks = [None] * trainer.world_size
-            dist.all_gather_object(ranks, local)
-            if trainer.is_global_zero:
-                elapsed = self.elapsed_prior + time.perf_counter() - self.started
-                record = {
-                    "update": trainer.global_step,
-                    "examples_seen": self.examples_seen,
-                    "world_size": trainer.world_size,
-                    "rank_metrics": ranks,
-                    "elapsed_seconds": elapsed,
-                    "validation_seconds": self.validation_seconds,
-                    "allocated_gpu_hours": trainer.world_size * elapsed / 3600
-                    if pl_module.device.type == "cuda"
-                    else None,
-                }
-                with (
-                    Path(trainer.default_root_dir) / "distributed_metrics.jsonl"
-                ).open("a", encoding="utf-8") as handle:
-                    handle.write(json.dumps(record) + "\n")
+            self._record_metrics(trainer, pl_module, "train_batch_end")
         if (
             self.stop_after_updates is not None
             and trainer.global_step >= self.stop_after_updates
@@ -181,6 +246,11 @@ class DistributedExactResumeCallback(L.Callback):
             restore_local_rng(self.validation_rng, pl_module.device)
             self.validation_rng = None
         self.validation_seconds += time.perf_counter() - self.validation_started
+        if not trainer.sanity_checking:
+            self._record_metrics(trainer, pl_module, "validation_end")
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        self._record_metrics(trainer, pl_module, "train_epoch_end")
 
     def on_save_checkpoint(self, trainer, pl_module, checkpoint):
         loop = checkpoint.get("loops", {}).get("fit_loop", {})
@@ -216,6 +286,9 @@ class DistributedExactResumeCallback(L.Callback):
             "elapsed_seconds": self.elapsed_prior + time.perf_counter() - self.started,
             "validation_seconds": self.validation_seconds,
         }
+        checkpoint["training_memory"] = self._record_metrics(
+            trainer, pl_module, "checkpoint_save", checkpoint_id=identifier[0]
+        )
 
     def on_load_checkpoint(self, trainer, pl_module, checkpoint):
         record = checkpoint.get(RESUME_KEY, {})
@@ -255,6 +328,8 @@ class DistributedExactResumeCallback(L.Callback):
         trainer.save_checkpoint(
             str(Path(trainer.default_root_dir) / "checkpoints" / "last.ckpt")
         )
+        # Lightning tears down the GPU strategy before on_fit_end.
+        self._record_metrics(trainer, pl_module, "train_end")
         if trainer.is_global_zero:
             from tools.cylinderflow_stride8.evaluation_io import write_json
 
@@ -313,6 +388,17 @@ class DistributedExactResumeCallback(L.Callback):
             "error": repr(exception),
             "traceback": traceback.format_exc(),
         }
+        if self.memory_segment is not None:
+            # A failed rank may be alone; no collective is safe in this hook.
+            try:
+                record["training_memory_local"] = {
+                    "memory_segment": self.memory_segment,
+                    "memory_start_update": self.memory_start_update,
+                    "epoch": int(trainer.current_epoch),
+                    "rank_metrics": self._local_memory(trainer, pl_module),
+                }
+            except RuntimeError:
+                record["training_memory_local"] = {"status": "cuda_unavailable"}
         (folder / f"rank_{trainer.global_rank:03d}_failure.json").write_text(
             json.dumps(record, indent=2), encoding="utf-8"
         )
