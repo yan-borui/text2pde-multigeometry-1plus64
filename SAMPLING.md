@@ -3,6 +3,8 @@
 固定选中的动力学权重、AE、Train 归一化和完整 Validation100，重复运行 R 个独立采样组。
 每组内将 K 次预测解码到物理 UVP，逐节点、逐时刻求均值，再对均值场运行完整评价。
 每个 K 得到 R 个 Validation100 分数，报告分数均值、无偏方差与标准差。
+六项主指标均分别统计：UV relative RMSE、gauge-free pressure RMSE、vorticity RMSE、
+divergence RMSE、energy relative RMSE 和 enstrophy relative RMSE。
 
 任务为首帧预测未来 64 个存储帧，物理时间步为 0.0016。首帧保留观测值，
 未来所有节点 UVP 由模型预测。原网格、面积权重、Airfoil 节点标签和压力 gauge adjustment
@@ -82,6 +84,8 @@ K=1/2/4/8/16 的测速共生成 3,720 个额外预测。
 ## 回传结果
 
 - 根目录 `summary.json`、`score_curve.csv`：各 K 的 R 个分数、均值、无偏方差、标准差。
+- `summary.json` 的 `ensemble[K].metrics` 与 `metric_curve.csv`：六项指标的跨组统计。
+- `group_metrics.csv`：每组、每 K 的六项完整 Validation100 指标。
 - `group_scores.csv`：每组、每 K 的完整 Validation100 分数。
 - `score_curve.pdf/png`：请求绘图时生成，左图为均值及标准差，右图为分数方差。
 - `manifest.json`、`exit.json`：输入文件身份、源码提交、配置、seed 协议和完成状态。

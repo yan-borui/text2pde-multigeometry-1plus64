@@ -26,17 +26,38 @@ def file_identity(source: Path) -> dict[str, Any]:
     }
 
 
+def dit_checkpoint(args: argparse.Namespace) -> tuple[Path, str, str]:
+    """Resolve a fixed snapshot or the completed-stage selection read-only."""
+    if args.checkpoint is not None:
+        if args.weights is None or args.expected_update is None:
+            raise ValueError(
+                "fixed checkpoints require --weights and --expected-update"
+            )
+        return args.checkpoint, args.weights, "fixed_checkpoint"
+    if args.weights is not None or args.expected_update is not None:
+        raise ValueError("--weights and --expected-update require --checkpoint")
+    selected = json.loads((args.run / "selection.json").read_text(encoding="utf-8"))
+    if not selected.get("complete_stage"):
+        raise ValueError("use a fixed checkpoint or a completed-stage selection")
+    return (
+        args.run / selected["checkpoint"],
+        selected["weights"],
+        "completed_stage_selection",
+    )
+
+
 def load_adapter(method: str, args: argparse.Namespace, device: torch.device) -> dict:
     if method == "dit":
         from graph_dit.data import DT
         from graph_dit.evaluate import Predictor, load_selected
 
-        selected = json.loads((args.run / "selection.json").read_text(encoding="utf-8"))
-        if not selected.get("complete_stage"):
-            raise ValueError("finish the allocated stage before using its selection")
-        model, checkpoint = load_selected(
-            args.run / selected["checkpoint"], args.artifacts, selected["weights"]
-        )
+        checkpoint_file, weights, binding = dit_checkpoint(args)
+        model, checkpoint = load_selected(checkpoint_file, args.artifacts, weights)
+        if (
+            args.expected_update is not None
+            and checkpoint["update"] != args.expected_update
+        ):
+            raise ValueError("checkpoint update differs from --expected-update")
         if checkpoint["config"]["training"]["precision"] != "fp32":
             raise ValueError("Airfoil sampling requires the established FP32 model")
         model.to(device).eval().float()
@@ -61,7 +82,8 @@ def load_adapter(method: str, args: argparse.Namespace, device: torch.device) ->
             data_identity=predictor.data.identity(),
             provenance={
                 "checkpoint_id": checkpoint["checkpoint_id"],
-                "weights": selected["weights"],
+                "weights": weights,
+                "checkpoint_binding": binding,
                 "update": checkpoint["update"],
                 "artifact_id": checkpoint["artifact_id"],
                 "training_seed": checkpoint["config"]["seed"],
@@ -236,17 +258,18 @@ def ensemble(
 def input_files(method: str, args: argparse.Namespace) -> dict[str, Path]:
     """Resolve immutable model, normalization and data inputs without hashing."""
     if method == "dit":
-        selection_file = args.run / "selection.json"
-        selected = json.loads(selection_file.read_text(encoding="utf-8"))
-        return {
-            "selection": selection_file,
-            "checkpoint": args.run / selected["checkpoint"],
+        checkpoint_file, _, binding = dit_checkpoint(args)
+        files = {
+            "checkpoint": checkpoint_file,
             "autoencoder": args.artifacts / "autoencoder.pt",
             "artifacts": args.artifacts / "artifact.json",
             "latent_cache": args.artifacts / "train_latents.h5",
             "dataset": args.data_dir / "airfoil_stride8_75frames.h5",
             "manifest": args.data_dir / "airfoil_stride8_75frames_manifest.json",
         }
+        if binding == "completed_stage_selection":
+            files["selection"] = args.run / "selection.json"
+        return files
     files = {
         name: getattr(args, name) for name in ("config", "checkpoint", "ae_checkpoint")
     }
@@ -297,7 +320,12 @@ def build_parser(method: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
     if method == "dit":
-        for name in ("run", "artifacts", "data-dir"):
+        checkpoint_source = parser.add_mutually_exclusive_group(required=True)
+        checkpoint_source.add_argument("--run", type=Path)
+        checkpoint_source.add_argument("--checkpoint", type=Path)
+        parser.add_argument("--weights", choices=("raw", "ema_0.999", "ema_0.9999"))
+        parser.add_argument("--expected-update", type=int)
+        for name in ("artifacts", "data-dir"):
             parser.add_argument("--" + name, type=Path, required=True)
         parser.add_argument("--sampling-steps", type=int, default=6)
     else:

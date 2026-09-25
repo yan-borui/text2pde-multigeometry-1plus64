@@ -18,6 +18,14 @@ from sampling_ensemble_support import build_parser, file_identity, input_files
 
 TRAJECTORIES = list(range(1000, 1100))
 SCORE = "selection_uv_relative_rmse"
+METRICS = (
+    "uv_relative_rmse",
+    "pressure_gauge_free_rmse",
+    "vorticity_rmse",
+    "divergence_rmse",
+    "energy_relative_rmse",
+    "enstrophy_relative_rmse",
+)
 
 
 def write_json(file_path: Path, value: Any) -> None:
@@ -128,6 +136,20 @@ def validate_group(
             or any(row.get("sample_count") != 1 for row in rows)
         ):
             raise ValueError(f"group {group}, K={count}: incomplete ensemble scores")
+        for metric in METRICS:
+            values = [row[metric] for row in rows]
+            aggregate = result[metric]
+            if (
+                aggregate["finite_count"] != 100
+                or not all(math.isfinite(value) for value in values)
+                or not math.isclose(
+                    aggregate["mean"],
+                    statistics.mean(values),
+                    rel_tol=1e-12,
+                    abs_tol=1e-15,
+                )
+            ):
+                raise ValueError(f"group {group}, K={count}: invalid {metric}")
         score = result[SCORE]
         reference = statistics.mean(row["uv_relative_rmse"] for row in rows)
         if not math.isfinite(score) or not math.isclose(
@@ -177,6 +199,15 @@ def publish(root: Path, identity: dict, groups: list[dict]) -> dict:
     for count in identity["protocol"]["ensemble_sizes"]:
         values = [item["summary"]["ensemble"][str(count)][SCORE] for item in groups]
         result["ensemble"][str(count)] = statistics_for(values)
+        result["ensemble"][str(count)]["metrics"] = {
+            metric: statistics_for(
+                [
+                    item["summary"]["ensemble"][str(count)][metric]["mean"]
+                    for item in groups
+                ]
+            )
+            for metric in METRICS
+        }
     write_json(root / "summary.json", result)
     with (root / "score_curve.csv").open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream)
@@ -200,6 +231,37 @@ def publish(root: Path, identity: dict, groups: list[dict]) -> dict:
         for item in groups:
             for count, row in item["summary"]["ensemble"].items():
                 writer.writerow([result["method"], item["group"], count, row[SCORE]])
+    with (root / "metric_curve.csv").open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["method", "K", "R", "metric", "mean", "variance", "std"])
+        for count, row in result["ensemble"].items():
+            for metric, values in row["metrics"].items():
+                writer.writerow(
+                    [
+                        result["method"],
+                        count,
+                        values["count"],
+                        metric,
+                        values["mean"],
+                        values["variance"],
+                        values["std"],
+                    ]
+                )
+    with (root / "group_metrics.csv").open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["method", "group", "K", "metric", "validation100_mean"])
+        for item in groups:
+            for count, row in item["summary"]["ensemble"].items():
+                for metric in METRICS:
+                    writer.writerow(
+                        [
+                            result["method"],
+                            item["group"],
+                            count,
+                            metric,
+                            row[metric]["mean"],
+                        ]
+                    )
     return result
 
 
@@ -349,6 +411,8 @@ def run(method: str) -> None:
                     options = dict(native, output_dir=directory, seed_offset=offset)
                     options["skip_timing"] = not timing
                     for name, value in options.items():
+                        if value is None:
+                            continue
                         option = "--" + name.replace("_", "-")
                         if isinstance(value, bool):
                             if value:
