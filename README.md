@@ -1,3 +1,5 @@
+**Test 评测：**[官方下载、1+64 转换与完整 Test100 入口](TEST.md)。
+
 # Text2PDE on MeshGraphNets CylinderFlow
 
 **历史 checkpoint UV 误差表：**[逐点 Validation100、断点续跑与图片交接](TRAINING_CURVE.md)。

@@ -104,8 +104,10 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
         )
         self.strict_formal_counts = bool(strict_formal_counts)
 
-        if self.split not in FORMAL_SPLIT_COUNTS:
-            raise ValueError("stride-8 workflow exposes Train and Validation only")
+        if self.split not in (*FORMAL_SPLIT_COUNTS, "test"):
+            raise ValueError("split must be train, validation, or test")
+        if self.split == "test" and self.stage != "ldm":
+            raise ValueError("Test forecasting uses exactly 1+64 frames and stage ldm")
         if self.sequence_start != SEQUENCE_START:
             raise ValueError("stride-8 workflow requires the unique phase-zero prefix")
         if self.sequence_length != expected_length:
@@ -121,6 +123,11 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
         if not candidate.is_absolute():
             candidate = self.manifest_path.parent / candidate
         self.data_path = candidate.resolve()
+        if (
+            self.split == "test"
+            and self.data_path != self.manifest_path.parent / "data.h5"
+        ):
+            raise ValueError("Test data must use the HDF5 validated with its manifest")
 
         split_records = self.manifest["splits"][self.split]
         self.trajectory_indices = tuple(int(value) for value in split_records)
@@ -137,6 +144,13 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
 
     def _validate_manifest(self) -> None:
         manifest = self.manifest
+        if self.split == "test":
+            from mgn_data.test_data import TestData
+
+            dataset_name = "airfoil" if "airfoil" in DATA_FORMAT else "cylinderflow"
+            TestData(self.manifest_path.parent, dataset_name)
+            normalizer_values_from_manifest(manifest)
+            return
         required_scalars = {
             "format": DATA_FORMAT,
             "frames": STORED_FRAME_COUNT,
@@ -275,7 +289,7 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
         # identity attributes are checked directly here.
         scalar_attributes = {
             "format": DATA_FORMAT,
-            "frames": STORED_FRAME_COUNT,
+            "frames": SEQUENCE_LENGTH if self.split == "test" else STORED_FRAME_COUNT,
             "source_frames": RAW_FRAME_COUNT,
             "temporal_stride": TEMPORAL_STRIDE,
             "phase_offset": PHASE_OFFSET,
@@ -291,11 +305,11 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
             if not np.isclose(value, expected, rtol=0.0, atol=1.0e-12):
                 raise ValueError(f"HDF5 {name}={value}, expected {expected}")
         if int(handle.attrs.get("train_count", -1)) != len(
-            self.manifest["splits"]["train"]
+            self.manifest["splits"].get("train", ())
         ):
             raise ValueError("HDF5 Train count differs from manifest")
         if int(handle.attrs.get("validation_count", -1)) != len(
-            self.manifest["splits"]["validation"]
+            self.manifest["splits"].get("validation", ())
         ):
             raise ValueError("HDF5 Validation count differs from manifest")
         expected_stats = np.asarray(self.normalizer_values, dtype=np.float64)
@@ -338,8 +352,13 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
             raise ValueError(f"group {group_name} has the wrong global index")
         if str(group.attrs.get("source_split", "")).lower() != self.split:
             raise ValueError(f"group {group_name} crosses the requested split")
-        if int(group.attrs.get("frames", -1)) != STORED_FRAME_COUNT:
-            raise ValueError(f"group {group_name} does not contain 75 frames")
+        expected_frames = (
+            SEQUENCE_LENGTH if self.split == "test" else STORED_FRAME_COUNT
+        )
+        if int(group.attrs.get("frames", -1)) != expected_frames:
+            raise ValueError(
+                f"group {group_name} does not contain {expected_frames} frames"
+            )
         if int(group.attrs.get("temporal_stride", -1)) != TEMPORAL_STRIDE:
             raise ValueError(f"group {group_name} has the wrong temporal stride")
         if int(group.attrs.get("phase_offset", -1)) != PHASE_OFFSET:
@@ -412,7 +431,9 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
                         "sequence_start": SEQUENCE_START,
                         "sequence_length": self.sequence_length,
                         "stage": self.stage,
-                        "stored_frame_count": STORED_FRAME_COUNT,
+                        "stored_frame_count": SEQUENCE_LENGTH
+                        if self.split == "test"
+                        else STORED_FRAME_COUNT,
                         "raw_frame_start": int(frame_indices[0]),
                         "raw_frame_stop_inclusive": int(frame_indices[-1]),
                         "temporal_stride": TEMPORAL_STRIDE,
