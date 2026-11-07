@@ -27,7 +27,7 @@ RAW_DATA_DIR=/data/datasets/meshgraphnets/airfoil bash scripts/airfoil_4gpu.sh d
 数据日志和状态分别为`$DATA_DIR/preparation.log`、`preparation_status.json`。
 转换在独立暂存目录进行，全部1100条完成后再发布；失败的暂存数据和日志保留，重试入口会重新转换。
 输出仍为`airfoil_stride8_75frames.h5`、`airfoil_stride8_75frames_manifest.json`和normalizer。
-Test不下载、不读取。`prepare`可选地提前完成本方法缓存，`train`会自动包含这些步骤。
+训练准备仅下载 Train/Validation；独立 Test 下载、转换和评测见 [TEST.md](TEST.md)。`prepare`可选地提前完成本方法缓存，`train`会自动包含这些步骤。
 
 ## 固定任务
 

@@ -129,6 +129,9 @@ def evaluate_one_checkpoint(
         text=True,
     )
     provenance = {
+        "evaluation_split": dataset.split,
+        "test_accessed": dataset.split == "test",
+        "evaluation_manifest": dataset.manifest,
         "training_seed": int(config["training"]["seed"]),
         "checkpoint": str(checkpoint_path.resolve()),
         "checkpoint_update": global_step,
@@ -272,7 +275,14 @@ def evaluate_one_checkpoint(
         "data_contract": stage_data_contract("ldm"),
         "sampling_protocol": "one joint 1 clean + 64 future DDIM call",
         "evaluation_seeds": list(seeds),
-        "validation_indices": list(indices),
+        "evaluation_split": dataset.split,
+        "test_accessed": dataset.split == "test",
+        "evaluation_indices": list(indices),
+        **(
+            {"validation_indices": list(indices)}
+            if dataset.split == "validation"
+            else {"test_indices": list(indices)}
+        ),
         "aggregate": summarize_trajectories(rows),
         "finite_sequences": finite_count,
         "total_sequences": len(rows),
@@ -376,7 +386,10 @@ def render_representatives(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("select", "validation"), required=True)
+    parser.add_argument(
+        "--mode", choices=("select", "validation", "test"), required=True
+    )
+    parser.add_argument("--test-data-dir", type=Path)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--ae-checkpoint", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path)
@@ -386,6 +399,8 @@ def main() -> None:
     parser.add_argument("--ddim-steps", type=int, default=DDIM_STEPS)
     parser.add_argument("--device", default="cuda:0")
     args = parser.parse_args()
+    if (args.mode == "test") != (args.test_data_dir is not None):
+        parser.error("--mode test requires --test-data-dir; other modes must omit it")
 
     seeds = tuple(args.seeds)
     if seeds != SAMPLING_SEEDS:
@@ -404,7 +419,7 @@ def main() -> None:
         indices = validation_monitor_indices()
     else:
         if args.checkpoint is None or args.checkpoint_dir is not None:
-            raise ValueError("validation mode requires --checkpoint only")
+            raise ValueError("final evaluation requires --checkpoint only")
         checkpoints = [args.checkpoint]
         indices = tuple(range(100))
 
@@ -419,6 +434,18 @@ def main() -> None:
         raise TypeError("joint64 evaluation requires the stride-8 dataset")
     if dataset.split != "validation" or len(dataset) != 100:
         raise ValueError("joint64 evaluation requires all 100 Validation trajectories")
+    if args.mode == "test":
+        training_values = dataset.normalizer_values
+        dataset = CylinderFlowStride8TrajectoryDataset(
+            args.test_data_dir / "manifest.json",
+            split="test",
+            return_metadata=True,
+            stage="ldm",
+        )
+        if dataset.normalizer_values != training_values:
+            raise ValueError(
+                "Test normalization differs from the selected model's training data"
+            )
     if not args.ae_checkpoint.is_file():
         raise FileNotFoundError(args.ae_checkpoint)
     device = torch.device(args.device)
@@ -461,7 +488,7 @@ def main() -> None:
         selected = candidate_results[0]
         if selected["total_sequences"] != 300:
             raise AssertionError(
-                "formal Validation must contain exactly 100 x 3 samples"
+                "final evaluation must contain exactly 100 x 3 samples"
             )
 
     summary = {
@@ -476,14 +503,16 @@ def main() -> None:
         "prediction": "frames 1 through 64 from one joint DDIM sample",
         "ddim_steps": DDIM_STEPS,
         "sampling_seeds": list(seeds),
-        "test_entry_available": False,
-        "test_accessed": False,
+        "test_entry_available": True,
+        "test_accessed": args.mode == "test",
+        "evaluation_split": dataset.split,
+        "evaluation_manifest": str(dataset.manifest_path),
         "candidates": candidate_results,
         "selected": selected,
     }
     write_json(args.output_dir / "summary.json", summary)
     write_json(args.output_dir / "rows.json", rows_by_checkpoint)
-    if args.mode == "validation":
+    if args.mode in {"validation", "test"}:
         rows = rows_by_checkpoint[str(checkpoints[0].resolve())]
         render_representatives(args.output_dir, rows)
     print(json.dumps(summary, indent=2, sort_keys=True))
