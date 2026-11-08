@@ -26,8 +26,8 @@ from tools.cylinderflow_stride8.protocol import (
     validation_monitor_indices,
 )
 
-DATA_REPOSITORY = "dm-meshgraphnets/airfoil"
-DATA_REVISION = "airfoil.uvp.stride8.first75.v1"
+DATA_REPOSITORY = "cmudrc/MegaFlow2D"
+DATA_REVISION = "megaflow2d.ellipse.high_uvp.stride15.first65.seed42.v1"
 
 
 def forecast_initial(model, sampler, sample: dict) -> np.ndarray:
@@ -91,7 +91,7 @@ def benchmark_checkpoint(
                 "revision": DATA_REVISION,
                 "split": "validation",
                 "phase_offset": 0,
-                "raw_frame_indices": list(range(0, 513, 8)),
+                "raw_frame_indices": list(range(1, 962, 15)),
             },
             provenance={
                 "checkpoint": str(checkpoint_file.resolve()),

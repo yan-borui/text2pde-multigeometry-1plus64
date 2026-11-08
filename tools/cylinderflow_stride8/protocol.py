@@ -5,13 +5,15 @@ from typing import Any
 
 import numpy as np
 
+from megaflow_data.contract import FRAME_INDICES, REVISION, SOURCE_REVISION, splits
+
 AE_MILESTONES = (62_500, 125_000, 187_500, 250_000)
 LDM_MILESTONES = AE_MILESTONES
 SAMPLING_SEEDS = (0, 1, 2)
 DDIM_STEPS = 20
 VALIDATION_TRAJECTORY_COUNT = 100
-MONITOR_TRAJECTORY_COUNT = 24
-STAGE_PROTOCOL = "text2pde.airfoil_uvp_stride8.ae75.joint65.v1"
+MONITOR_TRAJECTORY_COUNT = 100
+STAGE_PROTOCOL = "text2pde.ellipse_uvp_stride15.ae65.joint65.v1"
 
 
 def validation_monitor_indices(
@@ -33,6 +35,14 @@ def validate_locked_config(config: dict[str, Any], stage: str) -> None:
         raise ValueError(f"unsupported training stage: {stage}")
     data = config["data"]
     training = config["training"]
+    for key, expected in {
+        "use_norm": True,
+        "scaler": "normal",
+        "recalculate": False,
+        "conditional": False,
+    }.items():
+        if data["normalizer"].get(key) != expected:
+            raise ValueError(f"normalizer.{key} differs from the locked Train65 recipe")
     devices = training.get("devices", 1)
     if devices not in (1, 4):
         raise ValueError("formal recipes support one or four devices")
@@ -40,11 +50,11 @@ def validate_locked_config(config: dict[str, Any], stage: str) -> None:
         if (
             training.get("strategy") != "ddp"
             or data.get("distributed_world_size") != 4
-            or data.get("validation_global_batches") != 24
-            or training.get("limit_val_batches") != 6
+            or data.get("validation_global_batches") != 100
+            or training.get("limit_val_batches") != 25
         ):
             raise ValueError("four-device sampler/Validation contract mismatch")
-    expected_length = 75 if stage == "ae" else 65
+    expected_length = 65
     expected_dataset = {
         "stage": stage,
         "sequence_start": 0,
@@ -63,13 +73,13 @@ def validate_locked_config(config: dict[str, Any], stage: str) -> None:
         if data.get(name) != expected:
             raise ValueError(f"data.{name}={data.get(name)!r}, expected {expected!r}")
     if data["dataset"].get("strict_formal_counts") is not True:
-        raise ValueError("formal config must enforce 1000/100 trajectory counts")
+        raise ValueError("formal config must enforce 782/100/100 trajectory counts")
     expected_training = {
         "seed": 42,
         "precision": "16-mixed",
         "accumulate_grad_batches": 4 // devices,
-        "dataset_size": 1000,
-        "max_epochs": 1000,
+        "dataset_size": 782,
+        "max_epochs": -1,
         "max_steps": 250_000,
         "last_every_n_steps": 5_000,
         "milestone_every_n_steps": 62_500,
@@ -119,11 +129,15 @@ def stage_data_contract(stage: str) -> dict[str, Any]:
         raise ValueError(f"unsupported training stage: {stage}")
     return {
         "protocol": STAGE_PROTOCOL,
+        "dataset_revision": REVISION,
+        "source_revision": SOURCE_REVISION,
+        "split_indices": {key: list(value) for key, value in splits().items()},
+        "source_frame_indices": list(FRAME_INDICES),
         "stage": stage,
         "sequence_start": 0,
-        "sequence_length": 75 if stage == "ae" else 65,
-        "temporal_stride": 8,
-        "normalization_frames": 75,
+        "sequence_length": 65,
+        "temporal_stride": 15,
+        "normalization_frames": 65,
         "time_coordinates": "sequence-relative [0,1]",
     }
 

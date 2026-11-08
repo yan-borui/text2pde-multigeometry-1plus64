@@ -170,7 +170,7 @@ def main() -> None:
         "schema": "text2pde.cylinderflow_stride8.ae_selection.v2",
         "data_contract": stage_data_contract("ae"),
         "selection_metric": "mean_normalized_uvp_l1",
-        "monitor_rule": "24 uniformly covering Validation trajectory indices",
+        "monitor_rule": "all 100 Validation trajectory indices",
         "monitor_indices": list(indices),
         "sequence_raw_indices": "0:600:8",
         "test_accessed": False,

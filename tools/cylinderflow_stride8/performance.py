@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from megaflow_data.contract import splits
+
 import argparse
 import csv
 import json
@@ -19,9 +21,7 @@ PERFORMANCE_PROTOCOL = "cylinderflow.initial_cpu_to_physical_cpu.fp32.v1"
 WARMUP_REPEATS = 2
 MEASURED_REPEATS = 3
 FUTURE_FRAMES = 64
-VALIDATION_TRAJECTORIES = tuple(
-    int(value) + 1000 for value in np.rint(np.linspace(0, 99, 24))
-)
+VALIDATION_TRAJECTORIES = splits()["validation"]
 
 
 def write_json(file_path: Path, value: Any) -> None:
@@ -213,30 +213,30 @@ def benchmark(
     indices = tuple(indices)
     if len(set(indices)) != len(indices) or not indices:
         raise ValueError("benchmark case indices must be nonempty and unique")
-    if formal and len(indices) != 24:
-        raise ValueError("formal benchmark requires the fixed Validation-24 registry")
+    if formal and len(indices) != 100:
+        raise ValueError("formal benchmark requires the fixed Validation-100 registry")
     inventory = model_inventory(models)
     sync(device)
     environment = runtime_identity(device)
     settings = {
         "protocol": PERFORMANCE_PROTOCOL,
-        "registry": "validation24" if formal else "synthetic_debug",
+        "registry": "validation100" if formal else "synthetic_debug",
         "warmup_repeats_per_trajectory": WARMUP_REPEATS,
         "measured_repeats_per_trajectory": MEASURED_REPEATS,
         "microbatch": 1,
         "future_frames": FUTURE_FRAMES,
-        "physical_dt": 0.0016,
+        "physical_dt": 0.15,
         "sampling_labels": list(range(MEASURED_REPEATS)),
         "seed_rule": "((draw+1)*1000003 + trajectory_index*9176) mod (2**31-1)",
         "input": "CPU physical initial UVP and static geometry; disk-backed static caches resident in CPU memory",
-        "output": "CPU numpy float32 physical UVP [65,N,3], including boundary writeback",
+        "output": "CPU numpy float32 physical UVP [65,N,3], all nodes predicted",
         "timed": [
             "input packing and normalization",
             "CPU-device transfers",
             "conditioning/encoding",
             "all 64-frame model calls",
             "decoding",
-            "boundary writeback",
+            "predict-all boundary policy",
             "return to CPU",
         ],
         "excluded": [
@@ -272,7 +272,7 @@ def benchmark(
         trajectory = int(sample["trajectory_index"])
         if formal and trajectory != VALIDATION_TRAJECTORIES[position]:
             raise ValueError(
-                "benchmark must use the fixed, ordered Validation-24 registry"
+                "benchmark must use the fixed, ordered Validation-100 registry"
             )
         if trajectory in case_ids:
             raise ValueError(

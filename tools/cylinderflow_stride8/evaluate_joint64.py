@@ -204,7 +204,7 @@ def evaluate_one_checkpoint(
                 sample["mesh_pos"].numpy(),
                 sample["cells"].numpy(),
                 sample["node_type"].numpy(),
-                dt=0.0016,
+                dt=0.15,
             )
             metrics.update(
                 boundary_metrics(
@@ -437,7 +437,7 @@ def main() -> None:
     if args.mode == "test":
         training_values = dataset.normalizer_values
         dataset = CylinderFlowStride8TrajectoryDataset(
-            args.test_data_dir / "manifest.json",
+            args.test_data_dir / "ellipse_stride15_65frames_manifest.json",
             split="test",
             return_metadata=True,
             stage="ldm",
@@ -494,11 +494,11 @@ def main() -> None:
     summary = {
         "schema": "text2pde.cylinderflow_stride8.joint64_evaluation.v2",
         "data_contract": stage_data_contract("ldm"),
-        "evaluator": "airfoil.uvp.physical_mesh.v1",
+        "evaluator": "megaflow2d.ellipse.uvp.physical_mesh.v1",
         "mode": args.mode,
         "selection_metric": "failed clips, then mean trajectory UV relative RMSE, then earlier update",
-        "physical_dt": 0.0016,
-        "sequence_raw_indices": "0:520:8",
+        "physical_dt": 0.15,
+        "sequence_raw_indices": "1,16,...,961",
         "condition": "clean frame 0 only",
         "prediction": "frames 1 through 64 from one joint DDIM sample",
         "ddim_steps": DDIM_STEPS,

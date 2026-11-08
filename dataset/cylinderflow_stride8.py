@@ -9,21 +9,20 @@ import h5py
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+from megaflow_data.contract import validate_manifest
 
-DATA_FORMAT = "dgn4cfd.mgn_airfoil_uvp_temporal_stride.v1"
-STORED_FRAME_COUNT = 75
-RAW_FRAME_COUNT = 601
-RAW_FRAME_DT = 0.0002
-TEMPORAL_STRIDE = 8
-FRAME_DT = 0.0016
+DATA_FORMAT = "dgn4cfd.megaflow2d_ellipse_uvp.v1"
+STORED_FRAME_COUNT = 65
+RAW_FRAME_COUNT = 1000
+RAW_FRAME_DT = 0.01
+TEMPORAL_STRIDE = 15
+FRAME_DT = 0.15
 PHASE_OFFSET = 0
 SEQUENCE_START = 0
 SEQUENCE_LENGTH = 65
-FORMAL_SPLIT_COUNTS = {"train": 1000, "validation": 100}
-SOURCE_NODE_TYPES = frozenset((0, 2, 4))
-EXPECTED_SOURCE_FRAME_INDICES = np.arange(
-    PHASE_OFFSET, 600, TEMPORAL_STRIDE, dtype=np.int64
-)
+FORMAL_SPLIT_COUNTS = {"train": 782, "validation": 100, "test": 100}
+SOURCE_NODE_TYPES = frozenset((0, 2, 4, 5, 6))
+EXPECTED_SOURCE_FRAME_INDICES = np.arange(1, 962, TEMPORAL_STRIDE, dtype=np.int64)
 USED_SOURCE_FRAME_INDICES = EXPECTED_SOURCE_FRAME_INDICES[:SEQUENCE_LENGTH]
 
 
@@ -31,7 +30,7 @@ def _read_manifest(manifest_path: Path) -> dict[str, Any]:
     with manifest_path.open("r", encoding="utf-8") as handle:
         manifest = json.load(handle)
     if not isinstance(manifest, dict):
-        raise TypeError("CylinderFlow stride-8 manifest must be a JSON object")
+        raise TypeError("CylinderFlow Ellipse stride-15 manifest must be a JSON object")
     return manifest
 
 
@@ -64,7 +63,7 @@ def normalizer_values_from_manifest(manifest: dict[str, Any]) -> list[float]:
 def write_text2pde_normalizer(
     manifest_path: str | Path, output_path: str | Path
 ) -> list[float]:
-    """Write audited all-75-frame Train statistics in Text2PDE pickle format."""
+    """Write audited all-65-frame Train statistics in Text2PDE pickle format."""
 
     manifest = _read_manifest(Path(manifest_path).resolve())
     values = normalizer_values_from_manifest(manifest)
@@ -76,7 +75,7 @@ def write_text2pde_normalizer(
 
 
 class CylinderFlowStride8TrajectoryDataset(Dataset):
-    """One fixed phase-zero sample: 75 frames for AE, first 65 for LDM."""
+    """One fixed phase-zero sample: 65 frames for AE, first 65 for LDM."""
 
     def __init__(
         self,
@@ -97,7 +96,7 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
         self.sequence_start = int(sequence_start)
         self.stage = str(stage).lower()
         if self.stage not in ("ae", "ldm"):
-            raise ValueError("stride-8 stage must be ae or ldm")
+            raise ValueError("Ellipse stride-15 stage must be ae or ldm")
         expected_length = STORED_FRAME_COUNT if self.stage == "ae" else SEQUENCE_LENGTH
         self.sequence_length = (
             expected_length if sequence_length is None else int(sequence_length)
@@ -109,10 +108,12 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
         if self.split == "test" and self.stage != "ldm":
             raise ValueError("Test forecasting uses exactly 1+64 frames and stage ldm")
         if self.sequence_start != SEQUENCE_START:
-            raise ValueError("stride-8 workflow requires the unique phase-zero prefix")
+            raise ValueError(
+                "Ellipse stride-15 workflow requires the unique phase-zero prefix"
+            )
         if self.sequence_length != expected_length:
-            required = "75 AE frames" if self.stage == "ae" else "exactly 1 + 64 frames"
-            raise ValueError(f"stride-8 {self.stage} requires {required}")
+            required = "65 AE frames" if self.stage == "ae" else "exactly 1 + 64 frames"
+            raise ValueError(f"Ellipse stride-15 {self.stage} requires {required}")
 
         self._validate_manifest()
         manifest_data_path = self.manifest.get("dataset")
@@ -123,12 +124,6 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
         if not candidate.is_absolute():
             candidate = self.manifest_path.parent / candidate
         self.data_path = candidate.resolve()
-        if (
-            self.split == "test"
-            and self.data_path != self.manifest_path.parent / "data.h5"
-        ):
-            raise ValueError("Test data must use the HDF5 validated with its manifest")
-
         split_records = self.manifest["splits"][self.split]
         self.trajectory_indices = tuple(int(value) for value in split_records)
         trajectories = self.manifest["trajectories"]
@@ -143,113 +138,24 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
         ] = {}
 
     def _validate_manifest(self) -> None:
-        manifest = self.manifest
-        if self.split == "test":
-            from mgn_data.test_data import TestData
-
-            dataset_name = "airfoil" if "airfoil" in DATA_FORMAT else "cylinderflow"
-            TestData(self.manifest_path.parent, dataset_name)
-            normalizer_values_from_manifest(manifest)
-            return
-        required_scalars = {
-            "format": DATA_FORMAT,
-            "frames": STORED_FRAME_COUNT,
-            "raw_frames": RAW_FRAME_COUNT,
-            "temporal_stride": TEMPORAL_STRIDE,
-            "phase_offset": PHASE_OFFSET,
-            "sequences_per_trajectory": 1,
-            "phase_augmentation": False,
-            "test_accessed": False,
+        validate_manifest(self.manifest)
+        records = self.manifest["trajectories"]
+        by_id = {int(record["global_index"]): record for record in records}
+        expected = {
+            case: split
+            for split, ids in self.manifest["splits"].items()
+            for case in ids
         }
-        for name, expected in required_scalars.items():
-            value = manifest.get(name)
-            if value != expected:
-                raise ValueError(f"manifest {name}={value!r}, expected {expected!r}")
-        for name, expected in (("raw_frame_dt", RAW_FRAME_DT), ("frame_dt", FRAME_DT)):
-            value = float(manifest.get(name, np.nan))
-            if not np.isclose(value, expected, rtol=0.0, atol=1.0e-12):
-                raise ValueError(f"manifest {name}={value}, expected {expected}")
-
-        source_indices = np.asarray(
-            manifest.get("source_frame_indices"), dtype=np.int64
-        )
-        if not np.array_equal(source_indices, EXPECTED_SOURCE_FRAME_INDICES):
-            raise ValueError("manifest source_frame_indices are not exactly 0:600:8")
-
-        splits = manifest.get("splits")
-        if not isinstance(splits, dict) or set(splits) != set(FORMAL_SPLIT_COUNTS):
-            raise ValueError("manifest splits must be exactly train and validation")
-        train_indices = tuple(int(value) for value in splits["train"])
-        validation_indices = tuple(int(value) for value in splits["validation"])
-        if len(set(train_indices)) != len(train_indices) or len(
-            set(validation_indices)
-        ) != len(validation_indices):
-            raise ValueError("a trajectory appears more than once within a split")
-        if set(train_indices).intersection(validation_indices):
-            raise ValueError("Train and Validation trajectory identities overlap")
-        combined = train_indices + validation_indices
-        if len(combined) != int(manifest.get("trajectory_count", -1)):
-            raise ValueError("split membership does not cover trajectory_count exactly")
-        if len(set(combined)) != len(combined):
-            raise ValueError("split identities are not globally unique")
-
-        if self.strict_formal_counts:
-            if len(train_indices) != FORMAL_SPLIT_COUNTS["train"]:
-                raise ValueError("formal Train split must contain 1000 trajectories")
-            if len(validation_indices) != FORMAL_SPLIT_COUNTS["validation"]:
-                raise ValueError(
-                    "formal Validation split must contain 100 trajectories"
-                )
-            if train_indices != tuple(range(1000)):
-                raise ValueError(
-                    "formal Train identities must be global indices 0:1000"
-                )
-            if validation_indices != tuple(range(1000, 1100)):
-                raise ValueError(
-                    "formal Validation identities must be global indices 1000:1100"
-                )
-
-        records = manifest.get("trajectories")
-        if not isinstance(records, list) or len(records) != len(combined):
-            raise ValueError("trajectory records do not match split membership")
-        by_index: dict[int, dict[str, Any]] = {}
-        split_lookup = {
-            global_index: split_name
-            for split_name, values in (
-                ("train", train_indices),
-                ("validation", validation_indices),
-            )
-            for global_index in values
-        }
-        for record in records:
-            global_index = int(record["global_index"])
-            if global_index in by_index:
-                raise ValueError(f"duplicate trajectory record {global_index}")
-            by_index[global_index] = record
-            expected_split = split_lookup.get(global_index)
+        if len(records) != len(by_id) or set(by_id) != set(expected):
+            raise ValueError("Ellipse trajectory records differ from split membership")
+        for case, split in expected.items():
+            record = by_id[case]
             if (
-                expected_split is None
-                or str(record.get("source_split")).lower() != expected_split
+                record["source_split"] != split
+                or record["group"] != f"trajectory_{case:04d}"
             ):
-                raise ValueError(
-                    f"trajectory {global_index} has inconsistent split identity"
-                )
-            if record.get("group") != f"trajectory_{global_index:04d}":
-                raise ValueError(
-                    f"trajectory {global_index} has an unexpected HDF5 group"
-                )
-            if int(record.get("frames", -1)) != STORED_FRAME_COUNT:
-                raise ValueError(
-                    f"trajectory {global_index} does not declare 75 frames"
-                )
-            if int(record.get("temporal_stride", -1)) != TEMPORAL_STRIDE:
-                raise ValueError(f"trajectory {global_index} has the wrong stride")
-            if int(record.get("phase_offset", -1)) != PHASE_OFFSET:
-                raise ValueError(f"trajectory {global_index} has the wrong phase")
-        if set(by_index) != set(combined):
-            raise ValueError("trajectory records and split identities differ")
-
-        normalizer_values_from_manifest(manifest)
+                raise ValueError("Ellipse trajectory record has inconsistent identity")
+        normalizer_values_from_manifest(self.manifest)
 
     def __len__(self) -> int:
         return len(self.trajectory_indices)
@@ -274,7 +180,7 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
         return self._handle
 
     def _validate_hdf5_root(self, handle: h5py.File) -> None:
-        # Airfoil preparation writes portable HDF5 attributes.
+        # Ellipse preparation writes portable HDF5 attributes.
         scalar_attributes = {
             "format": DATA_FORMAT,
             "frames": SEQUENCE_LENGTH if self.split == "test" else STORED_FRAME_COUNT,
@@ -399,7 +305,7 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
             frame_indices = torch.from_numpy(
                 EXPECTED_SOURCE_FRAME_INDICES[: self.sequence_length].copy()
             )
-            physical_time = frame_indices.to(torch.float64) * RAW_FRAME_DT
+            physical_time = (frame_indices.to(torch.float64) - 1) * RAW_FRAME_DT
             result.update(
                 {
                     "field": field,
@@ -414,7 +320,7 @@ class CylinderFlowStride8TrajectoryDataset(Dataset):
                         "split": self.split,
                         "sample_index": int(index if index >= 0 else index + len(self)),
                         "trajectory_index": global_index,
-                        "source_local_index": int(record["source_local_index"]),
+                        "source_local_index": int(record["source_index"]),
                         "group": record["group"],
                         "sequence_start": SEQUENCE_START,
                         "sequence_length": self.sequence_length,

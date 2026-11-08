@@ -19,7 +19,7 @@ def main() -> None:
                 "output": str(args.output.resolve()),
                 "format": "Text2PDE interleaved [u_mean,u_std,v_mean,v_std,p_mean,p_std]",
                 "values": values,
-                "statistics_scope": "all 75 phase-zero stride-8 Train frames",
+                "statistics_scope": "all retained 65 stride-15 Train frames",
             },
             indent=2,
         )

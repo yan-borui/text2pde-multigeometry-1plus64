@@ -3,6 +3,7 @@ from torch.utils.data import DataLoader
 from modules.modules.normalizer import Normalizer
 from modules.utils import Struct
 import copy
+import pickle
 
 
 class FluidsDataModule(L.LightningDataModule):
@@ -23,7 +24,7 @@ class FluidsDataModule(L.LightningDataModule):
         self.train_examples_seen = int(dataconfig.get("train_examples_seen", 0))
         self.distributed_world_size = int(dataconfig.get("distributed_world_size", 1))
         self.validation_global_batches = int(
-            dataconfig.get("validation_global_batches", 24)
+            dataconfig.get("validation_global_batches", 100)
         )
 
         if "drop_last" in dataconfig.keys():
@@ -108,6 +109,13 @@ class FluidsDataModule(L.LightningDataModule):
         else:
             raise ValueError(f"Unsupported data mode: {self.mode}")
 
+        if self.mode == "cylinderflow_stride8":
+            with open(normalizer_config["stat_path"], "rb") as stream:
+                values = pickle.load(stream)
+            if list(values) != self.train_dataset.normalizer_values:
+                raise ValueError(
+                    "normalizer differs from the retained Train65 statistics"
+                )
         self.normalizer = Normalizer(dataset=self.train_dataset, **normalizer_config)
 
     def prepare_data(self):
@@ -180,7 +188,7 @@ class FluidsDataModule(L.LightningDataModule):
         if self.mode == "cylinderflow_stride8" and self.distributed_world_size > 1:
             from modules.modules.distributed_sampling import FixedValidationSampler
 
-            # Preserve the original training diagnostic's first 24 validation batches.
+            # Evaluate every Validation trajectory exactly once across ranks.
             sampler = FixedValidationSampler(
                 range(min(self.validation_global_batches, len(self.val_dataset))),
                 self.trainer.global_rank,

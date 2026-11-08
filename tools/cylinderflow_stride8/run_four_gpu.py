@@ -248,7 +248,7 @@ def main():
                 )
         write_json(
             result / "status.json",
-            {"state": "validation_complete_no_test_entry", "world_size": 4},
+            {"state": "validation_complete", "world_size": 4},
         )
     finally:
         lock.close()

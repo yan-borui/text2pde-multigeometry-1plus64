@@ -13,7 +13,6 @@ class DistributedEpochPermutationSampler(Sampler[int]):
             size < 1
             or world_size < 1
             or not 0 <= rank < world_size
-            or size % world_size
             or start_examples_seen < 0
             or start_examples_seen % world_size
         ):
@@ -22,20 +21,30 @@ class DistributedEpochPermutationSampler(Sampler[int]):
             )
         self.seed, self.size = seed, size
         self.rank, self.world_size = rank, world_size
-        self.next_epoch, self.next_offset = divmod(start_examples_seen, size)
+        self.epoch_size = ((size + world_size - 1) // world_size) * world_size
+        self.next_cursor = start_examples_seen
 
     def __iter__(self):
-        epoch, offset = self.next_epoch, self.next_offset
-        self.next_epoch, self.next_offset = epoch + 1, 0
-        permutation = torch.randperm(
-            self.size, generator=torch.Generator().manual_seed(self.seed + epoch)
-        )
-        yield from permutation[offset + self.rank :: self.world_size].tolist()
+        start = self.next_cursor
+        stop = (start // self.epoch_size + 1) * self.epoch_size
+        self.next_cursor = stop
+        previous_epoch, permutation = None, None
+        # Continue into the next deterministic permutation instead of padding or
+        # dropping the two trajectories at a 782-case/four-rank boundary.
+        for position in range(start + self.rank, stop, self.world_size):
+            epoch, offset = divmod(position, self.size)
+            if epoch != previous_epoch:
+                permutation = torch.randperm(
+                    self.size,
+                    generator=torch.Generator().manual_seed(self.seed + epoch),
+                )
+                previous_epoch = epoch
+            yield int(permutation[offset])
 
     def __len__(self):
         # Lightning restores the consumed batch count and adds it to the fetcher.
         # Report the full epoch so that the resumed suffix is not truncated twice.
-        return self.size // self.world_size
+        return self.epoch_size // self.world_size
 
 
 class FixedValidationSampler(Sampler[int]):

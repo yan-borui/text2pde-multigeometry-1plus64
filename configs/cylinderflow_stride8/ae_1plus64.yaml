@@ -13,7 +13,7 @@ data:
     strict_formal_counts: true
     stage: ae
     sequence_start: 0
-    sequence_length: 75
+    sequence_length: 65
     use_embed: false
   normalizer:
     use_norm: true
@@ -85,14 +85,14 @@ training:
   last_every_n_steps: 5000
   milestone_every_n_steps: 62500
   checkpoint: null
-  dataset_size: 1000
-  max_epochs: 1000
+  dataset_size: 782
+  max_epochs: -1
   max_steps: 250000
   learning_rate: 1.0e-05
   pct_start: 0.15
   scheduler: Cosine
   dist: false
-  limit_val_batches: 24
+  limit_val_batches: 100
   default_root_dir: null
   run_dir: null
 

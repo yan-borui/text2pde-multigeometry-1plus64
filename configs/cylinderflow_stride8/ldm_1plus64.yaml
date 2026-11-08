@@ -39,10 +39,10 @@ training:
   milestone_every_n_steps: 62500
   gradient_clip_val: 0
   checkpoint: null
-  dataset_size: 1000
-  max_epochs: 1000
+  dataset_size: 782
+  max_epochs: -1
   max_steps: 250000
-  limit_val_batches: 24
+  limit_val_batches: 100
   default_root_dir: null
   run_dir: null
 
@@ -135,8 +135,8 @@ model:
       learning_rate: 1.0e-05
       scheduler: Cosine
       max_steps: 250000
-      max_epochs: 1000
-      dataset_size: 1000
+      max_epochs: -1
+      dataset_size: 782
   cond_stage_config:
     conditional: true
     out_dim: 128

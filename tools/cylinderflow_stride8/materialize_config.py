@@ -27,9 +27,9 @@ def materialize_config(
             strategy="ddp",
             accumulate_grad_batches=1,
             dist=True,
-            limit_val_batches=6,
+            limit_val_batches=25,
         )
-        config["data"].update(distributed_world_size=4, validation_global_batches=24)
+        config["data"].update(distributed_world_size=4, validation_global_batches=100)
         if stage == "ldm":
             config["model"]["dist"] = True
     validate_locked_config(config, stage)

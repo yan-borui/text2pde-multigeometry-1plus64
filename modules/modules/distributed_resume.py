@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
-import os
 from pathlib import Path
 import random
 import shutil
@@ -50,8 +49,14 @@ def restore_local_rng(state, device) -> None:
 def freeze_source(run: Path, resume: bool) -> None:
     root = Path(__file__).resolve().parents[2]
     files = [root / "train_AE.py", root / "train_ldm.py"]
-    for directory in ("modules", "dataset", "tools/cylinderflow_stride8"):
+    for directory in (
+        "modules",
+        "dataset",
+        "tools/cylinderflow_stride8",
+        "megaflow_data",
+    ):
         files.extend(sorted((root / directory).rglob("*.py")))
+    files.append(root / "megaflow_data/splits.json")
     for original in files:
         destination = run / "source" / original.relative_to(root)
         if resume or destination.exists():

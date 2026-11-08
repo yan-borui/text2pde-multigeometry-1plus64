@@ -30,7 +30,22 @@ def evaluate(args):
         validate_locked_config(config, args.stage)
         datamodule = FluidsDataModule(config["data"])
         dataset = datamodule.val_dataset
-        if dataset.split != "validation" or len(dataset) != 100:
+        if args.mode == "test":
+            from dataset.cylinderflow_stride8 import (
+                CylinderFlowStride8TrajectoryDataset,
+            )
+
+            dataset = CylinderFlowStride8TrajectoryDataset(
+                config["data"]["dataset"]["manifest"],
+                data_path=config["data"]["dataset"]["data_path"],
+                split="test",
+                stage="ldm",
+                return_metadata=True,
+            )
+        if (
+            dataset.split != ("test" if args.mode == "test" else "validation")
+            or len(dataset) != 100
+        ):
             raise ValueError(
                 "four-GPU evaluation requires the fixed 100-trajectory Validation split"
             )
@@ -119,7 +134,7 @@ def evaluate(args):
             )
             for number, checkpoint in work:
                 folder = args.output_dir / f"candidate_{number:03d}"
-                if args.mode == "validation":
+                if args.mode in ("validation", "test"):
                     folder = folder / f"rank_{ctx.rank:03d}"
                 completed = folder / "completed.json"
                 if completed.exists():
@@ -147,7 +162,7 @@ def evaluate(args):
                             ctx.device,
                             folder / "predictions",
                             resume=True,
-                            fail_on_runtime_error=True,
+                            fail_on_runtime_error=args.mode == "select",
                         )
                     record = {"number": number, "result": result, "rows": rows}
                     write_json(completed, record)
@@ -160,7 +175,7 @@ def evaluate(args):
             records = sorted(
                 [row for shard in shards for row in shard], key=lambda r: r["number"]
             )
-            if args.mode == "validation":
+            if args.mode in ("validation", "test"):
                 rows = [row for record in records for row in record["rows"]]
                 expected = {(index, seed) for index in indices for seed in (0, 1, 2)}
                 if (
@@ -213,8 +228,9 @@ def evaluate(args):
                 "selection_metric": "mean_normalized_uvp_l1"
                 if args.stage == "ae"
                 else "failed clips, then mean trajectory UV relative RMSE, then earlier update",
-                "test_accessed": False,
-                "test_entry_available": False,
+                "test_accessed": args.mode == "test",
+                "test_entry_available": True,
+                "evaluation_split": dataset.split,
                 "candidates": results,
                 "selected": selected,
                 "world_size": ctx.world,
@@ -230,7 +246,7 @@ def evaluate(args):
             (args.output_dir / "selected_checkpoint.txt").write_text(
                 selected["checkpoint"] + "\n", encoding="utf-8"
             )
-            if args.mode == "validation":
+            if args.mode in ("validation", "test"):
                 from .evaluate_joint64 import render_representatives
 
                 if not (args.output_dir / "representative_samples.json").exists():
@@ -258,7 +274,9 @@ def evaluate(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", choices=("ae", "ldm"), required=True)
-    parser.add_argument("--mode", choices=("select", "validation"), default="select")
+    parser.add_argument(
+        "--mode", choices=("select", "validation", "test"), default="select"
+    )
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--ae-checkpoint", type=Path)
     parser.add_argument("--checkpoint", type=Path)
