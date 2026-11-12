@@ -81,3 +81,46 @@ The wrapper materializes four-device configs, trains AE to 250k updates, selects
 - [EAGLE](https://github.com/yan-borui/eagle-cylinderflow-stride8/tree/feature/megaflow2d-ellipse-uvp-4gpu)
 - [AROMA](https://github.com/yan-borui/aroma-cylinderflow-stride8/tree/feature/megaflow2d-ellipse-uvp-4gpu)
 - [Text2PDE](https://github.com/yan-borui/text2pde-multigeometry-1plus64/tree/feature/megaflow2d-ellipse-uvp-4gpu)
+
+## Ellipse sampling and matched cost
+
+`scripts/ellipse_sampling.sh quality` evaluates the complete requested split on
+four GPUs. It supports K={1,2,4,8,16}, using nested prefixes of the same independent sample pool. The selected
+checkpoint and its representation remain fixed. Physical UVP fields are averaged
+before scoring; this is recorded separately from the native main-table aggregation.
+
+```bash
+export RESULT_ROOT=/shared/runs/ellipse_text2pde_seed0
+export DATA_DIR=/shared/data/megaflow2d_ellipse_stride15
+export OUTPUT_DIR=/shared/evaluation/ellipse_text2pde_test_members
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+SPLIT=test bash scripts/ellipse_sampling.sh quality
+export OUTPUT_DIR=/shared/evaluation/ellipse_text2pde_cost
+export CUDA_VISIBLE_DEVICES=0
+SPLIT=validation bash scripts/ellipse_sampling.sh benchmark
+```
+
+Each invocation requires a new output directory. Optional CHECKPOINT and
+AE_CHECKPOINT select explicit matching weights; defaults use this run's native
+Validation-selected files. PREPARED_DIR defaults to `$RESULT_ROOT/prepared` for
+graph baselines. Text2PDE uses the run's frozen `config/ldm_1plus64.yaml`.
+`--sampling-label-offset` selects a new sample pool without changing training seed.
+
+Member archives, member metrics, mean-field archives and summaries for each K
+retain the original case IDs and dt=0.15. Invalid members are retained; the
+aggregate reports failure counts and the command exits unsuccessfully. Four-rank
+merging checks every case/member pair exactly once. EAGLE geometry caches are
+isolated by evaluation and rank.
+
+The benchmark is a separate single-GPU FP32/batch1 invocation on the fixed 24
+Validation positions `rint(linspace(0,99,24))`, with two warmups and three timed
+repeats per case. It measures CPU initial field to CPU complete physical forecast,
+including sampling and field averaging, and records device/runtime, latency,
+memory and failures. Compare only matched hardware/runtime. Original Validation100
+benchmark callers remain supported and are labelled separately.
+
+The GLaDiT repository's `graph_dit.ellipse_report` accepts these summary files and
+physical prediction bundles alongside CylinderFlow/Airfoil results. Native stage
+`summary.json` records and pipeline timing receipts supply training cost; identify
+AE, dynamics and preparation separately. These interfaces have static verification
+only; formal four-GPU evaluation and single-GPU timing remain unexecuted.

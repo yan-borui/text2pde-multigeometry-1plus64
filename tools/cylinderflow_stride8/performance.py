@@ -207,20 +207,29 @@ def benchmark(
     models: Iterable[torch.nn.Module],
     model_load_seconds: float,
     formal: bool = True,
+    validation_count: int = 100,
 ) -> dict[str, Any]:
     """Benchmark one already-selected checkpoint; produce no quality ranking."""
     output_dir.mkdir(parents=True, exist_ok=False)
     indices = tuple(indices)
     if len(set(indices)) != len(indices) or not indices:
         raise ValueError("benchmark case indices must be nonempty and unique")
-    if formal and len(indices) != 100:
-        raise ValueError("formal benchmark requires the fixed Validation-100 registry")
+    if validation_count not in (24, 100):
+        raise ValueError("benchmark registry must be Validation24 or Validation100")
+    registry = tuple(
+        VALIDATION_TRAJECTORIES[i]
+        for i in np.rint(np.linspace(0, 99, validation_count)).astype(int)
+    )
+    if formal and len(indices) != validation_count:
+        raise ValueError(
+            "formal benchmark requires the declared fixed Validation registry"
+        )
     inventory = model_inventory(models)
     sync(device)
     environment = runtime_identity(device)
     settings = {
         "protocol": PERFORMANCE_PROTOCOL,
-        "registry": "validation100" if formal else "synthetic_debug",
+        "registry": f"validation{validation_count}" if formal else "synthetic_debug",
         "warmup_repeats_per_trajectory": WARMUP_REPEATS,
         "measured_repeats_per_trajectory": MEASURED_REPEATS,
         "microbatch": 1,
@@ -270,9 +279,9 @@ def benchmark(
         sample = load_case(index)
         input_load_seconds += time.perf_counter() - load_started
         trajectory = int(sample["trajectory_index"])
-        if formal and trajectory != VALIDATION_TRAJECTORIES[position]:
+        if formal and trajectory != registry[position]:
             raise ValueError(
-                "benchmark must use the fixed, ordered Validation-100 registry"
+                "benchmark must use the fixed, ordered Validation registry"
             )
         if trajectory in case_ids:
             raise ValueError(
