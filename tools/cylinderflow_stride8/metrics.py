@@ -196,13 +196,17 @@ def compute_metrics(
     cells: np.ndarray,
     node_type: np.ndarray,
     dt: float,
+    *,
+    expected_frames: int = 65,
 ) -> dict[str, Any]:
-    """Compute matched raw-grid metrics for one complete 65-frame clip."""
+    """Score a complete 65-frame clip, or an explicitly requested 75-frame clip."""
 
     if prediction.shape != target.shape or prediction.ndim != 3:
         raise ValueError("prediction and target must have matching shape [T,N,3]")
-    if prediction.shape[0] != 65 or prediction.shape[2] != 3:
-        raise ValueError("rollout evaluation requires exactly [65,N,3]")
+    if expected_frames not in (65, 75):
+        raise ValueError("expected_frames must be 65 or 75")
+    if prediction.shape[0] != expected_frames or prediction.shape[2] != 3:
+        raise ValueError(f"rollout evaluation requires [{expected_frames},N,3]")
     if not np.isfinite(target).all():
         raise ValueError("target contains non-finite values")
     if not np.isfinite(prediction).all():
@@ -253,7 +257,9 @@ def compute_metrics(
     conditioning_error = prediction[0, :, :2] - target[0, :, :2]
     metrics: dict[str, Any] = {
         "finite": True,
-        "uv_rmse": math.sqrt(velocity_error_energy / (64 * weights.sum() * 2)),
+        "uv_rmse": math.sqrt(
+            velocity_error_energy / ((expected_frames - 1) * weights.sum() * 2)
+        ),
         "uv_relative_rmse": _relative_rmse(
             velocity_error_energy, velocity_target_energy
         ),
@@ -332,7 +338,9 @@ def compute_metrics(
         "target_energy": energy_target.tolist(),
         "prediction_enstrophy": enstrophy_prediction.tolist(),
         "target_enstrophy": enstrophy_target.tolist(),
-        "temporal_frequencies_hz": np.fft.rfftfreq(64, d=dt)[1:].tolist(),
+        "temporal_frequencies_hz": np.fft.rfftfreq(expected_frames - 1, d=dt)[
+            1:
+        ].tolist(),
         "prediction_temporal_spectrum": prediction_spectrum.tolist(),
         "target_temporal_spectrum": target_spectrum.tolist(),
     }

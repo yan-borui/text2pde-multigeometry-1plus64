@@ -20,8 +20,18 @@ DATASETS = {
 }
 
 
-def prepare(dataset: str, raw: Path, destination: Path, train_manifest: Path) -> None:
+def prepare(
+    dataset: str,
+    raw: Path,
+    destination: Path,
+    train_manifest: Path,
+    *,
+    frames: int = 65,
+) -> None:
     """Publish only complete Test100 data; never fit statistics on Test."""
+    if frames not in (65, 75) or (frames == 75 and dataset != "cylinderflow"):
+        raise ValueError("75-frame conversion is only supported for CylinderFlow")
+    raw_indices = list(range(0, frames * 8, 8))
     raw_frames, raw_dt, data_format = DATASETS[dataset]
     training = json.loads(train_manifest.read_text(encoding="utf-8"))
     if (
@@ -53,7 +63,7 @@ def prepare(dataset: str, raw: Path, destination: Path, train_manifest: Path) ->
         if destination.exists():
             from .test_data import TestData
 
-            existing = TestData(destination, dataset)
+            existing = TestData(destination, dataset, expected_frames=frames)
             if existing.manifest["train_only_normalization"] != stats:
                 raise ValueError("existing Test data use different Train statistics")
             print(f"Reusing complete Test data: {destination}", flush=True)
@@ -63,7 +73,7 @@ def prepare(dataset: str, raw: Path, destination: Path, train_manifest: Path) ->
         )
         attributes = {
             "format": data_format,
-            "frames": 65,
+            "frames": frames,
             "raw_frames": raw_frames,
             "source_frames": raw_frames,
             "temporal_stride": 8,
@@ -92,14 +102,17 @@ def prepare(dataset: str, raw: Path, destination: Path, train_manifest: Path) ->
                     arrays = decode_example(example, metadata)
                     uvp = np.concatenate(
                         (
-                            arrays["velocity"][RAW_INDICES],
-                            arrays["pressure"][RAW_INDICES],
+                            arrays["velocity"][raw_indices],
+                            arrays["pressure"][raw_indices],
                         ),
                         axis=-1,
                     )
                     points = arrays["mesh_pos"][0]
                     labels = arrays["node_type"][0].reshape(-1)
-                    if uvp.shape != (65, len(points), 3) or not np.isfinite(uvp).all():
+                    if (
+                        uvp.shape != (frames, len(points), 3)
+                        or not np.isfinite(uvp).all()
+                    ):
                         raise ValueError(f"invalid Test UVP at record {index}")
                     if not np.any(labels == 4):
                         raise ValueError(f"missing inflow nodes in Test record {index}")
@@ -115,7 +128,7 @@ def prepare(dataset: str, raw: Path, destination: Path, train_manifest: Path) ->
                         source_local_index=index,
                         source_index=index,
                         source_split="test",
-                        frames=65,
+                        frames=frames,
                         temporal_stride=8,
                         phase_offset=0,
                         inlet_velocity=inlet,
@@ -128,14 +141,14 @@ def prepare(dataset: str, raw: Path, destination: Path, train_manifest: Path) ->
                     group.create_dataset("mesh_pos", data=points)
                     group.create_dataset("cells", data=arrays["cells"][0])
                     group.create_dataset("node_type", data=labels)
-                    group.create_dataset("source_frame_indices", data=RAW_INDICES)
+                    group.create_dataset("source_frame_indices", data=raw_indices)
                     records.append(
                         dict(
                             **record_attributes,
                             group=name,
                             nodes=len(points),
                             cells=len(arrays["cells"][0]),
-                            source_frame_indices=RAW_INDICES,
+                            source_frame_indices=raw_indices,
                         )
                     )
                     print(f"Converted Test {index + 1}/100", flush=True)
@@ -148,7 +161,7 @@ def prepare(dataset: str, raw: Path, destination: Path, train_manifest: Path) ->
                 "dataset": "data.h5",
                 "dataset_bytes": (staging / "data.h5").stat().st_size,
                 "dataset_name": dataset,
-                "source_frame_indices": RAW_INDICES,
+                "source_frame_indices": raw_indices,
                 "fields": ["u", "v", "p"],
                 "density_used": False,
                 "splits": {"test": list(range(100))},
@@ -163,7 +176,7 @@ def prepare(dataset: str, raw: Path, destination: Path, train_manifest: Path) ->
             )
             from .test_data import TestData
 
-            TestData(staging, dataset)
+            TestData(staging, dataset, expected_frames=frames)
             staging.rename(destination)
         except BaseException:
             print(f"Incomplete conversion retained at {staging}", flush=True)
@@ -177,8 +190,15 @@ def main() -> None:
     parser.add_argument("--raw-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--train-manifest", type=Path, required=True)
+    parser.add_argument("--frames", type=int, choices=(65, 75), default=65)
     args = parser.parse_args()
-    prepare(args.dataset, args.raw_dir, args.output_dir, args.train_manifest)
+    prepare(
+        args.dataset,
+        args.raw_dir,
+        args.output_dir,
+        args.train_manifest,
+        frames=args.frames,
+    )
 
 
 if __name__ == "__main__":

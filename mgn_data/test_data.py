@@ -8,13 +8,25 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from .prepare_test import DATASETS, RAW_INDICES
+from .prepare_test import DATASETS
 
 
 class TestData:
     """CPU geometry and physical fields for one fixed Test100 population."""
 
-    def __init__(self, directory: str | Path, dataset_name: str):
+    def __init__(
+        self,
+        directory: str | Path,
+        dataset_name: str,
+        *,
+        expected_frames: int = 65,
+    ):
+        if expected_frames not in (65, 75) or (
+            expected_frames == 75 and dataset_name != "cylinderflow"
+        ):
+            raise ValueError("75-frame Test is only supported for CylinderFlow")
+        self.frames = expected_frames
+        self.raw_indices = list(range(0, expected_frames * 8, 8))
         self.directory = Path(directory).expanduser().resolve(strict=True)
         self.manifest_file = self.directory / "manifest.json"
         self.manifest = json.loads(self.manifest_file.read_text(encoding="utf-8"))
@@ -24,19 +36,19 @@ class TestData:
         self.dt = raw_dt * 8
         expected = {
             "format": data_format,
-            "frames": 65,
+            "frames": self.frames,
             "raw_frames": raw_frames,
             "temporal_stride": 8,
             "phase_offset": 0,
             "phase_augmentation": False,
             "test_accessed": True,
             "trajectory_count": 100,
-            "source_frame_indices": RAW_INDICES,
+            "source_frame_indices": self.raw_indices,
             "splits": {"test": list(range(100))},
         }
         if any(self.manifest.get(key) != value for key, value in expected.items()):
             raise ValueError(
-                "expected a complete official Test100, stride-8, 65-frame manifest"
+                f"expected a complete official Test100, stride-8, {self.frames}-frame manifest"
             )
         if not np.isclose(
             self.manifest.get("frame_dt", 0), self.dt, rtol=0, atol=1e-12
@@ -78,14 +90,27 @@ class TestData:
                     raise ValueError("Test trajectory IDs must be distinct and ordered")
                 group = handle[record["group"]]
                 if (
+                    record.get("frames") != self.frames
+                    or record.get("source_frame_indices") != self.raw_indices
+                    or group.attrs.get("frames") != self.frames
+                    or not np.array_equal(
+                        group["source_frame_indices"][:], self.raw_indices
+                    )
+                ):
+                    raise ValueError(
+                        "Test trajectory frame indices differ from the requested task"
+                    )
+                if (
                     group.attrs.get("source_split") != "test"
                     or group.attrs.get("source_local_index") != index
                 ):
                     raise ValueError(
                         "Test HDF5 trajectory provenance differs from the manifest"
                     )
-                if group["uvp"].shape != (65, record["nodes"], 3):
-                    raise ValueError("Test UVP must contain exactly 1+64 frames")
+                if group["uvp"].shape != (self.frames, record["nodes"], 3):
+                    raise ValueError(
+                        f"Test UVP must contain exactly {self.frames} frames"
+                    )
                 if group["mesh_pos"].shape != (record["nodes"], 2):
                     raise ValueError("Test geometry and field node counts differ")
 
@@ -95,9 +120,9 @@ class TestData:
             "split": "test",
             "test_accessed": True,
             "split_indices": self.splits,
-            "stored_frames": 65,
-            "evaluation_frames": [0, 64],
-            "evaluation_raw_frame_indices": RAW_INDICES,
+            "stored_frames": self.frames,
+            "evaluation_frames": [0, self.frames - 1],
+            "evaluation_raw_frame_indices": self.raw_indices,
             "dt": self.dt,
             "source": self.manifest["source"],
         }
@@ -150,9 +175,12 @@ class TestData:
             )
         return self._static[index]
 
-    def read(self, index: int, start: int = 0, stop: int = 65) -> dict:
-        if not 0 <= start < stop <= 65:
-            raise ValueError("Test reads must stay inside stored frames 0..64")
+    def read(self, index: int, start: int = 0, stop: int | None = None) -> dict:
+        stop = self.frames if stop is None else stop
+        if not 0 <= start < stop <= self.frames:
+            raise ValueError(
+                f"Test reads must stay inside stored frames 0..{self.frames - 1}"
+            )
         static = self.static(index)
         with h5py.File(self.dataset, "r") as handle:
             field = np.asarray(
