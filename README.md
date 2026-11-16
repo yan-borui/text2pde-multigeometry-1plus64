@@ -1,3 +1,5 @@
+**长时预测：**[64 帧窗口、步长 32、未来 256 帧](SLIDING_WINDOW.md)。
+
 **Test 评测：**[官方下载、1+64 转换与完整 Test100 入口](TEST.md)。
 
 # Text2PDE on MeshGraphNets CylinderFlow
